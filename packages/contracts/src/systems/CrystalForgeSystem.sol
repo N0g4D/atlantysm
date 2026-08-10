@@ -293,6 +293,23 @@ contract CrystalForgeSystem is System {
     return (MintPrice.getConfigured(), MintPrice.getPrice());
   }
 
+  /**
+   * @notice The ERC-6551 inputs identity is derived from. `tokenContract == address(0)` means the
+   * forge has never been configured.
+   * @dev Exists because a Foundry script cannot read MUD tables directly: every generated accessor
+   * executes `address(this)` to choose between local storage and an external call, and Foundry
+   * rejects that opcode inside an ephemeral script contract. Deployment tooling therefore has to
+   * ask the World, not the table.
+   */
+  function forgeConfig()
+    public
+    view
+    returns (address accountRegistry, address accountImplementation, address tokenContract, bytes32 accountSalt)
+  {
+    ForgeConfigData memory config = ForgeConfig.get();
+    return (config.accountRegistry, config.accountImplementation, config.tokenContract, config.accountSalt);
+  }
+
   // -----------------------------------------------------------------------------------------
   // Internals
   // -----------------------------------------------------------------------------------------

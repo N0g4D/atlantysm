@@ -36,4 +36,9 @@ interface ICrystalForgeSystem {
   function app__mintRevenue() external view returns (uint256);
 
   function app__mintPrice() external view returns (bool configured, uint256 price);
+
+  function app__forgeConfig()
+    external
+    view
+    returns (address accountRegistry, address accountImplementation, address tokenContract, bytes32 accountSalt);
 }

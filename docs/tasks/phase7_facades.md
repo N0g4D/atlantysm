@@ -124,10 +124,10 @@ The ERC-721 side does not have this problem, precisely because minting was route
 
 ## 5. Open points
 
-1. **The facades are not wired by the deploy script.** `PostDeploy.s.sol` does not deploy
-   `CrystalNFT`/`ManaToken` or call `setTokenFacades`, so a fresh `mud deploy` produces a World where
-   **minting is impossible** (the forge rejects every caller). Tests do the wiring themselves. This
-   must be added before any real deployment.
+1. ~~**The facades are not wired by the deploy script.**~~ **Closed in phase 8.** `PostDeploy.s.sol`
+   now deploys both facades, configures the forge against the real NFT address, registers them and
+   sets a mint price. `test/PostDeploy.t.sol` plays the game end to end using only the state the
+   script leaves. See `phase8_deployment.md`.
 2. **`tokenURI` is unimplemented.** Metadata should eventually project `CrystalData` — level in
    particular — but that needs a renderer, not just a facade.
 3. **Replacing a facade silently changes who may mint.** `setTokenFacades` is not frozen, which is

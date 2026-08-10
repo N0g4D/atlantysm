@@ -14,7 +14,7 @@ import { ICrystalForgeSystem } from "../src/codegen/world/ICrystalForgeSystem.so
 import { CrystalForgeSystem } from "../src/systems/CrystalForgeSystem.sol";
 import { CrystalNFT } from "../src/tokens/CrystalNFT.sol";
 import { ManaToken } from "../src/tokens/ManaToken.sol";
-import { CrystalData, CrystalOwner, ForgeConfig, ManaBalance } from "../src/codegen/index.sol";
+import { CrystalData, CrystalOwner, ForgeConfig, ManaBalance, MintPrice } from "../src/codegen/index.sol";
 import { Element } from "../src/codegen/common.sol";
 
 /**
@@ -296,6 +296,11 @@ contract CrystalForgeSystemTest is MudTest {
   function testMintRevertsWhenNotConfigured() public {
     _setMintPrice(MINT_PRICE);
 
+    // PostDeploy configures the forge on every deploy (phase 8), so the unconfigured state this
+    // guard protects no longer occurs naturally and has to be restored deliberately.
+    vm.prank(deployer);
+    ForgeConfig.set(address(0), address(0), address(0), bytes32(0));
+
     vm.deal(alice, MINT_PRICE);
     vm.prank(alice);
     vm.expectRevert(ICrystalForgeSystem.CrystalForge_NotConfigured.selector);
@@ -345,8 +350,11 @@ contract CrystalForgeSystemTest is MudTest {
   /// @dev The sentinel earning its keep: an unset price must block minting outright, not silently
   /// mean "free". A deployment that forgot to price the forge is the failure mode being prevented.
   function testMintRevertsWhenNoPriceHasBeenSet() public {
-    vm.prank(deployer);
+    vm.startPrank(deployer);
     IWorld(worldAddress).app__configureForge(address(registry), accountImplementation, TOKEN_CONTRACT, ACCOUNT_SALT);
+    // Same reason as above: PostDeploy prices the forge, so the unpriced state is restored by hand.
+    MintPrice.set(false, 0);
+    vm.stopPrank();
 
     vm.deal(alice, 1 ether);
     vm.prank(alice);
