@@ -5,3 +5,9 @@ node_modules
 # sqlite indexer data
 *.db
 *.db-journal
+
+# macOS
+.DS_Store
+
+# local-only agent settings
+.claude/settings.local.json
