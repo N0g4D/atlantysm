@@ -24,6 +24,7 @@ The game logic is 100% on-chain, relying on the MUD framework (Entity-Component-
 - **Testing:** Every System MUST have an equivalent `forge test` file. Assert state changes explicitly.
 
 ## 5. Tooling & Execution Strategy
-- **When unsure about MUD API:** Do NOT hallucinate. Use your `fetch` MCP tool to read from `https://mud.dev/docs` before writing any MUD-specific code.
-- **When encountering unknown Foundry errors:** Use the `brave-search` tool to search for the specific error string.
-- **File System Usage:** Use the `filesystem` tool to inspect the `src` and `test` directories before proposing a file overwrite, to ensure you understand the current state of the smart contracts.
+- **Web research & documentation — Tavily only:** All web search, page retrieval and documentation lookups MUST go through the Tavily MCP tools (`tavily_search`, `tavily_extract`, `tavily_crawl`, `tavily_map`, `tavily_research`). Do not use any other web tool.
+- **When unsure about MUD API:** Do NOT hallucinate. Use `tavily_extract` on the relevant page under `https://mud.dev/docs` (or `tavily_map` to locate it first) before writing any MUD-specific code.
+- **When encountering unknown Foundry errors:** Use `tavily_search` on the specific error string.
+- **File System Usage:** Inspect `packages/contracts/src` and `packages/contracts/test` with the built-in file reading and search tools before proposing a file overwrite, to ensure you understand the current state of the smart contracts.

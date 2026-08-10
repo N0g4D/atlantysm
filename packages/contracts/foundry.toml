@@ -1,7 +1,6 @@
 [profile.default]
 solc = "0.8.24"
 ffi = false
-fuzz_runs = 256
 optimizer = true
 optimizer_runs = 3000
 verbosity = 2
@@ -21,6 +20,9 @@ extra_output_files = [
   "evm.bytecode"
 ]
 fs_permissions = [{ access = "read", path = "./"}]
+
+[profile.default.fuzz]
+runs = 256
 
 [profile.garnet]
 eth_rpc_url = "https://rpc.garnetchain.com"

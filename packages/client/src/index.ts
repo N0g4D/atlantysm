@@ -1,21 +1,7 @@
 import { setup } from "./mud/setup";
 import mudConfig from "contracts/mud.config";
 
-const {
-  components,
-  systemCalls: { increment },
-  network,
-} = await setup();
-
-// Components expose a stream that triggers when the component is updated.
-components.Counter.update$.subscribe((update) => {
-  const [nextValue, prevValue] = update.value;
-  console.log("Counter updated", update, { nextValue, prevValue });
-  document.getElementById("counter")!.innerHTML = String(nextValue?.value ?? "unset");
-});
-
-// Attach the increment function to the html element with ID `incrementButton` (if it exists)
-document.querySelector("#incrementButton")?.addEventListener("click", increment);
+const { network } = await setup();
 
 // https://vitejs.dev/guide/env-and-mode.html
 if (import.meta.env.DEV) {
