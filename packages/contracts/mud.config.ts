@@ -153,6 +153,28 @@ export default defineWorld({
     },
 
     /**
+     * One-shot marker for the starter mana faucet, keyed by the crystal's entity.
+     *
+     * A separate table rather than a field on `CrystalData` for two reasons. MUD table schemas are
+     * immutable once created, so extending `CrystalData` means replacing a table that three Systems
+     * already read. And the faucet is progression state, not identity: keeping it out of
+     * `CrystalData` means the hot read path (`_requireCrystal`, run on every arena action) does not
+     * widen to carry a flag it never looks at.
+     *
+     * `claimed` is authoritative on its own — do not infer eligibility from `ManaBalance`, since a
+     * crystal can legitimately hold zero mana after spending everything.
+     *
+     * Static width: 1 byte, one slot.
+     */
+    StarterManaClaimed: {
+      schema: {
+        id: "bytes32",
+        claimed: "bool",
+      },
+      key: ["id"],
+    },
+
+    /**
      * Monotonic counter used ONLY as an entropy input to token id derivation, never as the id
      * itself. Singleton.
      *

@@ -9,4 +9,5 @@ import { ArenaLobby, ArenaLobbyData } from "./tables/ArenaLobby.sol";
 import { MatchCommitment, MatchCommitmentData } from "./tables/MatchCommitment.sol";
 import { CrystalOwner } from "./tables/CrystalOwner.sol";
 import { ForgeConfig, ForgeConfigData } from "./tables/ForgeConfig.sol";
+import { StarterManaClaimed } from "./tables/StarterManaClaimed.sol";
 import { ForgeNonce } from "./tables/ForgeNonce.sol";

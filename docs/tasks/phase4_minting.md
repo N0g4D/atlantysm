@@ -94,13 +94,18 @@ the id, which keeps uniqueness by construction while removing trivial enumerabil
    any scarcity the game later relies on. Gating (payment, allowlist, per-address cap) belongs to the
    phase that defines the economy.
 2. **`CrystalOwner` must be retired or demoted** when the ERC-721 facade lands. See §2.
-3. **A fresh crystal has no mana.** Minting writes `CrystalData` only, and `createLobby` needs a
-   funded `ManaBalance`, so a new crystal cannot enter the arena until some future System
-   distributes mana.
+3. ~~**A fresh crystal has no mana.**~~ **Closed in phase 5.** `ProgressionSystem.claimStarterMana`
+   grants 100 ether once per crystal, so a forged crystal can now fund itself into the arena with no
+   admin involvement.
 4. **Nothing deploys the token bound account.** The entity is usable as an identity from the address
    alone, but for a crystal to actually *call* the World, its account must exist on-chain. Whoever
    owns the ERC-721 will need to invoke the registry's `createAccount` — a step the game currently
    never performs.
-5. **Levels never change.** `CrystalData.level` is written once at mint and no System raises it, so
-   the `ADVANTAGE_MULTIPLIER` mechanic in `ArenaSystem` currently only ever sees level 1 on both
-   sides. Progression needs its own phase.
+5. ~~**Levels never change.**~~ **Closed in phase 5.** `ProgressionSystem.levelUp` raises the level
+   for a progressive mana cost (`50 ether × current level`), so `ADVANTAGE_MULTIPLIER` and raw level
+   differences are both reachable in real matches.
+
+> **Note added in phase 5:** the faucet mints mana and levelling burns it, so **global mana supply is
+> no longer conserved**. `ArenaSystem`'s conservation invariant is unaffected — it asserts that
+> *settlement* neither mints nor burns, which remains true — but nothing may assume a fixed total
+> supply any more.
