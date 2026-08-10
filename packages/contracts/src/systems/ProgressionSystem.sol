@@ -82,8 +82,16 @@ contract ProgressionSystem is System {
   /// @dev One-time grant. Sized in the same 18-decimal scale as every other mana amount.
   uint128 internal constant STARTER_MANA = 100 ether;
 
-  /// @dev Cost of the next level is this times the CURRENT level, so the ladder steepens linearly.
-  uint128 internal constant LEVEL_UP_COST_PER_LEVEL = 50 ether;
+  /**
+   * @dev Base of the quadratic ladder: the next level costs `BASE * currentLevel^2`.
+   *
+   * Quadratic rather than linear on purpose. Combat damage scales LINEARLY with level, so a linear
+   * price made power exactly proportional to spend — no diminishing return, and an old crystal
+   * simply accumulated an unbounded, permanent edge. Squaring the cost while damage stays linear
+   * means each additional point of power costs strictly more than the last, which is what puts a
+   * practical ceiling on runaway progression without capping it by fiat.
+   */
+  uint128 internal constant LEVEL_UP_BASE_COST = 50 ether;
 
   /// @dev `CrystalData.level` is a uint8; raising this would wrap it to 0. See security note 3.
   uint8 internal constant MAX_LEVEL = type(uint8).max;
@@ -99,6 +107,7 @@ contract ProgressionSystem is System {
   error Progression_InsufficientMana(bytes32 entity, uint128 balance, uint128 required);
   error Progression_MaxLevelReached(bytes32 entity, uint8 level);
   error Progression_ManaOverflow(bytes32 entity);
+  error Progression_CostOverflow(uint8 level);
 
   // -----------------------------------------------------------------------------------------
   // Faucet
@@ -185,10 +194,29 @@ contract ProgressionSystem is System {
   // Internals
   // -----------------------------------------------------------------------------------------
 
-  /// @dev Cannot overflow: level is a uint8, so the product peaks at 50e18 * 255 ~= 1.3e22, far
-  /// below the uint128 ceiling of ~3.4e38.
+  /**
+   * @dev `BASE * level^2`, computed in uint256 so no intermediate can wrap before the bound is
+   * checked.
+   *
+   * The uint128 ceiling does NOT bind at the current constants, and the numbers are worth writing
+   * down because they are what decides whether MAX_LEVEL had to move:
+   *   - dearest single step, 254 -> 255:  50e18 * 254^2  = 3.2258e24 wei
+   *   - full climb, level 1 -> 255:       50e18 * 5494655 = 2.7473e26 wei
+   *   - uint128 ceiling:                                    3.4028e38 wei
+   * The dearest step leaves ~14 orders of magnitude of headroom, and a crystal only ever has to
+   * hold one step at a time, so the whole uint8 range stays physically reachable. MAX_LEVEL
+   * therefore stays 255.
+   *
+   * The overflow check below is consequently unreachable today. It is kept because it stops being
+   * unreachable the moment BASE grows or the level type widens — at which point a silent truncation
+   * would quietly make high levels CHEAP rather than expensive.
+   */
   function _levelUpCost(uint8 level) internal pure returns (uint128) {
-    return LEVEL_UP_COST_PER_LEVEL * uint128(level);
+    uint256 cost = uint256(LEVEL_UP_BASE_COST) * uint256(level) * uint256(level);
+    if (cost > type(uint128).max) revert Progression_CostOverflow(level);
+    // Bounded by the check above.
+    // forge-lint: disable-next-line(unsafe-typecast)
+    return uint128(cost);
   }
 
   /// @dev Must stay bit-identical to `ArenaSystem._entityOf` and `CrystalForgeSystem._entityOf`.

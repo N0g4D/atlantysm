@@ -153,6 +153,29 @@ export default defineWorld({
     },
 
     /**
+     * Price of one mint, in native ETH wei. Singleton. This is the sybil gate: it is what stops the
+     * forge — and through the faucet, the mana supply — from being an infinite free printer.
+     *
+     * `configured` is a deliberate sentinel rather than a "price 0 means free" convention. A
+     * never-written record reads back as zero, so without the flag a deployment that simply forgot
+     * to set a price would mint for free and look completely healthy. With it, minting is blocked
+     * until someone states a price on purpose — and a genuinely free mint stays expressible, by
+     * setting `configured = true` with `price = 0`.
+     *
+     * Unlike `ForgeConfig`, this table must NOT freeze after the first mint: identity derivation is
+     * permanent, but a price is an economic lever that has to stay tunable.
+     *
+     * Static width: 1 + 32 = 33 bytes, two slots.
+     */
+    MintPrice: {
+      schema: {
+        configured: "bool",
+        price: "uint256",
+      },
+      key: [],
+    },
+
+    /**
      * One-shot marker for the starter mana faucet, keyed by the crystal's entity.
      *
      * A separate table rather than a field on `CrystalData` for two reasons. MUD table schemas are

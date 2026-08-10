@@ -4,8 +4,10 @@ pragma solidity >=0.8.24;
 import { System } from "@latticexyz/world/src/System.sol";
 import { AccessControl } from "@latticexyz/world/src/AccessControl.sol";
 import { WorldResourceIdLib } from "@latticexyz/world/src/WorldResourceId.sol";
+import { ResourceId } from "@latticexyz/store/src/ResourceId.sol";
+import { Balances } from "@latticexyz/world/src/codegen/tables/Balances.sol";
 
-import { CrystalData, CrystalOwner, ForgeConfig, ForgeConfigData, ForgeNonce } from "../codegen/index.sol";
+import { CrystalData, CrystalOwner, ForgeConfig, ForgeConfigData, ForgeNonce, MintPrice } from "../codegen/index.sol";
 
 /**
  * @title CrystalForgeSystem
@@ -62,11 +64,24 @@ import { CrystalData, CrystalOwner, ForgeConfig, ForgeConfigData, ForgeNonce } f
  * SECURITY NOTES
  * ---------------------------------------------------------------------------------------------
  *
- * 1. MINTING IS PERMISSIONLESS AND FREE. Anyone may call `mintCrystal`, for any recipient, without
- *    limit or cost beyond gas. This matches the specification for this phase and is deliberately not
- *    fixed here, but it IS an open economic hole: crystals are the entry point to the arena, so an
- *    unbounded free supply undermines any scarcity the game later depends on. Gating (payment, an
- *    allowlist, a per-address cap) belongs in the phase that defines the economy.
+ * 1. MINTING IS PERMISSIONLESS BUT NO LONGER FREE. Anyone may still call `mintCrystal` for any
+ *    recipient, but each mint costs exactly `MintPrice.price` in native ETH. That price is the sybil
+ *    gate for the whole economy: a crystal is the only way to draw the mana faucet, so an unpriced
+ *    forge would make mana free and unbounded no matter what the faucet itself limits.
+ *    Payment must be EXACT. Underpaying reverts, and so does overpaying — no change is returned. A
+ *    refund path would mean sending ETH back mid-mint, which is a reentrancy surface bought for
+ *    nothing, since the caller already knows the price from `MintPrice` before sending.
+ *
+ * 1b. WHERE THE ETH ACTUALLY GOES, AND WHY THERE IS NO `withdrawETH` HERE. MUD does NOT forward
+ *    value to a System: `SystemCall` credits `Balances[namespace]` inside the World and then calls
+ *    the System with `call{value: 0}`, appending the original `msg.value` to calldata as trusted
+ *    context. So `_msgValue()` is what the payment check must read, and this contract's own ETH
+ *    balance is permanently zero. A `withdrawETH()` implemented here over `address(this).balance`
+ *    would compile, run, emit nothing suspicious and transfer exactly nothing.
+ *    Withdrawal is therefore the World's job, and MUD already ships it:
+ *      IWorld.transferBalanceToAddress(namespaceId, to, amount)
+ *    gated on namespace access and written checks-effects-interactions. `mintRevenue()` below
+ *    exposes the balance so the collectable amount is readable from this System's own surface.
  *
  * 2. THE CONFIG IS FROZEN BY THE FIRST MINT. `configureForge` reverts once any crystal exists.
  *    Changing the registry, implementation, token contract or salt afterwards would re-derive every
@@ -112,11 +127,17 @@ contract CrystalForgeSystem is System {
     bytes32 accountSalt
   );
 
+  /// @notice Emitted whenever the mint price changes. Unlike `ForgeConfigured`, this may fire any
+  /// number of times: a price is an economic lever, not an identity input.
+  event MintPriceSet(uint256 price);
+
   error CrystalForge_ZeroRecipient();
   error CrystalForge_NotConfigured();
   error CrystalForge_InvalidConfig();
   error CrystalForge_AlreadyMinted(uint256 minted);
   error CrystalForge_EntityCollision(bytes32 entity, uint256 tokenId);
+  error CrystalForge_MintPriceNotConfigured();
+  error CrystalForge_IncorrectPayment(uint256 expected, uint256 provided);
 
   // -----------------------------------------------------------------------------------------
   // Configuration
@@ -134,7 +155,7 @@ contract CrystalForgeSystem is System {
     address tokenContract,
     bytes32 accountSalt
   ) public {
-    AccessControl.requireOwner(WorldResourceIdLib.encodeNamespace(NAMESPACE), _msgSender());
+    AccessControl.requireOwner(_namespaceId(), _msgSender());
 
     // Security note 2: reconfiguring after a mint would strand every existing crystal.
     uint256 minted = ForgeNonce.getValue();
@@ -148,18 +169,43 @@ contract CrystalForgeSystem is System {
     emit ForgeConfigured(accountRegistry, accountImplementation, tokenContract, accountSalt);
   }
 
+  /**
+   * @notice Set the price of one mint, in native ETH wei. Namespace owner only.
+   *
+   * Deliberately NOT frozen by the first mint, unlike `configureForge`: that config decides where a
+   * crystal's identity lives and must never move, whereas a price is a lever the economy is expected
+   * to pull. Setting `0` is legal and means a genuinely free mint — it is distinguishable from "no
+   * price set yet" because the record carries an explicit `configured` flag.
+   */
+  function setMintPrice(uint256 price) public {
+    AccessControl.requireOwner(_namespaceId(), _msgSender());
+
+    MintPrice.set(true, price);
+    emit MintPriceSet(price);
+  }
+
   // -----------------------------------------------------------------------------------------
   // Minting
   // -----------------------------------------------------------------------------------------
 
   /**
-   * @notice Forge a new crystal at level 1 and assign it to `to`.
+   * @notice Forge a new crystal at level 1 and assign it to `to`, against an exact ETH payment.
+   * @dev `payable` matters for a reason that is easy to miss: the World forwards no value to a
+   * System (`call{value: 0}`), so this function never actually receives ETH — but worldgen mirrors
+   * the mutability onto `IWorld.app__mintCrystal`, and without `payable` there the World would
+   * reject the transaction before any of this runs. The payment itself is read from `_msgValue()`,
+   * the trusted context MUD appends to calldata. See security note 1b.
    * @param to The owner to credit. May be an EOA — the human forges, the crystal fights.
    * @return entity The crystal's permanent ECS key, derived from its token bound account.
    * @return tokenId The crystal's ERC-721 token id.
    */
-  function mintCrystal(address to) public returns (bytes32 entity, uint256 tokenId) {
+  function mintCrystal(address to) public payable returns (bytes32 entity, uint256 tokenId) {
     if (to == address(0)) revert CrystalForge_ZeroRecipient();
+
+    // The sybil gate. Checked before anything is derived or written.
+    if (!MintPrice.getConfigured()) revert CrystalForge_MintPriceNotConfigured();
+    uint256 price = MintPrice.getPrice();
+    if (_msgValue() != price) revert CrystalForge_IncorrectPayment(price, _msgValue());
 
     ForgeConfigData memory config = ForgeConfig.get();
     if (
@@ -209,6 +255,22 @@ contract CrystalForgeSystem is System {
     return _entityOf(_accountOf(ForgeConfig.get(), tokenId));
   }
 
+  /**
+   * @notice Mint revenue collected so far, in wei, still held by the World.
+   * @dev Reads the namespace balance MUD credits on every paid call. Withdraw it with
+   * `IWorld.transferBalanceToAddress(namespaceId, to, amount)` — see security note 1b for why that
+   * lives on the World and not here.
+   */
+  function mintRevenue() public view returns (uint256) {
+    return Balances.getBalance(_namespaceId());
+  }
+
+  /// @notice The current mint price, and whether one has been set at all. Read this before minting:
+  /// payment must match exactly and no change is returned.
+  function mintPrice() public view returns (bool configured, uint256 price) {
+    return (MintPrice.getConfigured(), MintPrice.getPrice());
+  }
+
   // -----------------------------------------------------------------------------------------
   // Internals
   // -----------------------------------------------------------------------------------------
@@ -244,5 +306,10 @@ contract CrystalForgeSystem is System {
   /// to fight under its own identity.
   function _entityOf(address account) internal pure returns (bytes32) {
     return bytes32(uint256(uint160(account)));
+  }
+
+  /// @dev The namespace this System lives in, and whose owner administers it and holds its revenue.
+  function _namespaceId() internal pure returns (ResourceId) {
+    return WorldResourceIdLib.encodeNamespace(NAMESPACE);
   }
 }

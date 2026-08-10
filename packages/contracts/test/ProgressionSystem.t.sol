@@ -81,7 +81,12 @@ contract ProgressionSystemTest is MudTest {
   bytes32 internal constant ACCOUNT_SALT = bytes32(uint256(0xA71A));
 
   uint128 internal constant STARTER_MANA = 100 ether;
-  uint128 internal constant COST_PER_LEVEL = 50 ether;
+
+  /// @dev Base of the quadratic ladder. Note that the cost at level 1 is `BASE * 1^2 == BASE`, which
+  /// is why every level-1 assertion below reads the same as it did under the old linear curve.
+  uint128 internal constant BASE_COST = 50 ether;
+
+  uint256 internal constant MINT_PRICE = 0.01 ether;
 
   function setUp() public override {
     super.setUp();
@@ -90,8 +95,10 @@ contract ProgressionSystemTest is MudTest {
     registry = address(new StubRegistry());
     accountImplementation = address(new StubAccountImplementation());
 
-    vm.prank(deployer);
+    vm.startPrank(deployer);
     IWorld(worldAddress).app__configureForge(registry, accountImplementation, TOKEN_CONTRACT, ACCOUNT_SALT);
+    IWorld(worldAddress).app__setMintPrice(MINT_PRICE);
+    vm.stopPrank();
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -144,7 +151,7 @@ contract ProgressionSystemTest is MudTest {
     // than the grant leaves behind — any future sink would land in the same place.
     vm.prank(account);
     IWorld(worldAddress).app__levelUp();
-    assertEq(ManaBalance.getAmount(entity), STARTER_MANA - COST_PER_LEVEL, "half spent on a level");
+    assertEq(ManaBalance.getAmount(entity), STARTER_MANA - BASE_COST, "half spent on a level");
     _fund(entity, 0);
 
     assertEq(ManaBalance.getAmount(entity), 0, "balance now looks exactly like a crystal that never claimed");
@@ -202,24 +209,28 @@ contract ProgressionSystemTest is MudTest {
     _fund(entity, STARTER_MANA);
 
     assertEq(CrystalData.getLevel(entity), 1, "starts at level 1");
-    assertEq(IWorld(worldAddress).app__levelUpCost(entity), COST_PER_LEVEL, "cost at level 1");
+    assertEq(IWorld(worldAddress).app__levelUpCost(entity), BASE_COST, "cost at level 1");
 
     vm.prank(account);
     uint8 newLevel = IWorld(worldAddress).app__levelUp();
 
     assertEq(newLevel, 2, "returned level");
     assertEq(CrystalData.getLevel(entity), 2, "persisted level");
-    assertEq(ManaBalance.getAmount(entity), STARTER_MANA - COST_PER_LEVEL, "mana debited");
+    assertEq(ManaBalance.getAmount(entity), STARTER_MANA - BASE_COST, "mana debited");
   }
 
-  /// @dev The ladder must steepen: each level costs 50 * the level being left behind.
-  function testLevelUpCostIsProgressive() public {
+  /**
+   * @dev The ladder is QUADRATIC since phase 6: each level costs `50 * level^2`. Damage still scales
+   * linearly with level, so squaring the price is what makes each additional point of power cost
+   * strictly more than the last.
+   */
+  function testLevelUpCostIsQuadratic() public {
     (bytes32 entity, address account) = _forge();
-    _fund(entity, 1_000 ether);
+    _fund(entity, 5_000 ether);
 
     uint128 spent = 0;
     for (uint8 level = 1; level <= 5; level++) {
-      uint128 expected = COST_PER_LEVEL * level;
+      uint128 expected = BASE_COST * level * level;
       assertEq(IWorld(worldAddress).app__levelUpCost(entity), expected, "quoted cost");
 
       vm.prank(account);
@@ -227,24 +238,63 @@ contract ProgressionSystemTest is MudTest {
 
       spent += expected;
       assertEq(CrystalData.getLevel(entity), level + 1, "level after each step");
-      assertEq(ManaBalance.getAmount(entity), 1_000 ether - spent, "running balance");
+      assertEq(ManaBalance.getAmount(entity), 5_000 ether - spent, "running balance");
     }
 
-    // 50 + 100 + 150 + 200 + 250
-    assertEq(spent, 750 ether, "total cost of levels 1 through 5");
+    // 50*1 + 50*4 + 50*9 + 50*16 + 50*25 = 50 + 200 + 450 + 800 + 1250
+    assertEq(spent, 2_750 ether, "total cost of levels 1 through 5");
+  }
+
+  /// @dev Pinned literals, so a refactor that quietly reintroduced a linear curve would fail here
+  /// rather than merely change a formula that the test recomputes the same wrong way.
+  function testLevelUpCostMatchesExplicitLiterals() public {
+    (bytes32 entity, ) = _forge();
+
+    vm.startPrank(deployer);
+    uint128[6] memory expected = [uint128(0), 50 ether, 200 ether, 450 ether, 800 ether, 1_250 ether];
+    for (uint8 level = 1; level <= 5; level++) {
+      CrystalData.setLevel(entity, level);
+      assertEq(IWorld(worldAddress).app__levelUpCost(entity), expected[level], "quadratic literal");
+    }
+    vm.stopPrank();
+  }
+
+  /**
+   * @dev The question the quadratic curve raises: does the uint128 mana ceiling now make high levels
+   * physically unreachable? It does not, and the margin is enormous — so MAX_LEVEL stays 255.
+   *   dearest single step (254 -> 255): 50e18 * 254^2 = 3.2258e24 wei
+   *   uint128 ceiling:                                  3.4028e38 wei
+   * A crystal only ever holds one step at a time, so the whole uint8 range remains payable.
+   */
+  function testTheQuadraticCurveNeverOutgrowsTheUint128Ceiling() public {
+    (bytes32 entity, ) = _forge();
+
+    vm.prank(deployer);
+    CrystalData.setLevel(entity, 254);
+
+    uint128 dearestStep = IWorld(worldAddress).app__levelUpCost(entity);
+    assertEq(dearestStep, BASE_COST * 254 * 254, "dearest step");
+    assertEq(dearestStep, 3_225_800 ether, "3.2258e24 wei, spelled out independently of the formula");
+    assertLt(dearestStep, type(uint128).max, "must remain payable within a uint128 balance");
+
+    // And it is genuinely payable, not merely representable.
+    _fund(entity, dearestStep);
+    address account = address(uint160(uint256(entity)));
+    vm.prank(account);
+    assertEq(IWorld(worldAddress).app__levelUp(), 255, "the ceiling is reachable under the new curve");
   }
 
   function testLevelUpRevertsOnInsufficientMana() public {
     (bytes32 entity, address account) = _forge();
-    _fund(entity, COST_PER_LEVEL - 1 wei);
+    _fund(entity, BASE_COST - 1 wei);
 
     vm.prank(account);
     vm.expectRevert(
       abi.encodeWithSelector(
         IProgressionSystem.Progression_InsufficientMana.selector,
         entity,
-        COST_PER_LEVEL - 1 wei,
-        COST_PER_LEVEL
+        BASE_COST - 1 wei,
+        BASE_COST
       )
     );
     IWorld(worldAddress).app__levelUp();
@@ -255,7 +305,7 @@ contract ProgressionSystemTest is MudTest {
   /// @dev The boundary must be inclusive: exactly enough is enough.
   function testLevelUpSucceedsAtExactlyTheCost() public {
     (bytes32 entity, address account) = _forge();
-    _fund(entity, COST_PER_LEVEL);
+    _fund(entity, BASE_COST);
 
     vm.prank(account);
     IWorld(worldAddress).app__levelUp();
@@ -322,7 +372,7 @@ contract ProgressionSystemTest is MudTest {
     vm.prank(account);
     IWorld(worldAddress).app__levelUp();
 
-    assertEq(_trackedSupply(entity), before - COST_PER_LEVEL, "supply must shrink by exactly the cost");
+    assertEq(_trackedSupply(entity), before - BASE_COST, "supply must shrink by exactly the cost");
     assertEq(ManaBalance.getAmount(_entityOf(human)), 0, "the owner must not receive it");
     assertEq(ManaBalance.getAmount(_entityOf(worldAddress)), 0, "nor the World");
   }
@@ -353,7 +403,7 @@ contract ProgressionSystemTest is MudTest {
     _fund(entity, STARTER_MANA);
 
     vm.expectEmit(true, false, false, true);
-    emit ProgressionSystem.CrystalLeveledUp(entity, 2, COST_PER_LEVEL, STARTER_MANA - COST_PER_LEVEL);
+    emit ProgressionSystem.CrystalLeveledUp(entity, 2, BASE_COST, STARTER_MANA - BASE_COST);
 
     vm.prank(account);
     IWorld(worldAddress).app__levelUp();
@@ -390,10 +440,10 @@ contract ProgressionSystemTest is MudTest {
 
     assertTrue(finalLevel > 1, "the crystal should have levelled at least once");
 
-    // Full ladder price for every level actually gained: 50 * (1 + 2 + ... + n).
+    // Full ladder price for every level actually gained: 50 * (1^2 + 2^2 + ... + n^2).
     uint128 fairPrice = 0;
     for (uint8 level = 1; level < finalLevel; level++) {
-      fairPrice += COST_PER_LEVEL * level;
+      fairPrice += BASE_COST * level * level;
     }
 
     assertTrue(burned >= fairPrice, "levels gained must never cost less than the ladder price");
@@ -494,8 +544,9 @@ contract ProgressionSystemTest is MudTest {
   /// account is never deployed — phase 4 open point 2 — so tests reach it with `vm.prank`.
   function _forge() internal returns (bytes32 entity, address account) {
     uint256 tokenId;
+    vm.deal(human, MINT_PRICE);
     vm.prank(human);
-    (entity, tokenId) = IWorld(worldAddress).app__mintCrystal(human);
+    (entity, tokenId) = IWorld(worldAddress).app__mintCrystal{ value: MINT_PRICE }(human);
     account = IWorld(worldAddress).app__crystalAccountOf(tokenId);
     assertEq(entity, _entityOf(account), "the entity must be the account, widened");
   }

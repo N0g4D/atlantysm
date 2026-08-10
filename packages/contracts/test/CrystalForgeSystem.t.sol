@@ -3,6 +3,8 @@ pragma solidity >=0.8.24;
 
 import { MudTest } from "@latticexyz/world/test/MudTest.t.sol";
 import { IWorldErrors } from "@latticexyz/world/src/IWorldErrors.sol";
+import { WorldResourceIdLib } from "@latticexyz/world/src/WorldResourceId.sol";
+import { ResourceId } from "@latticexyz/store/src/ResourceId.sol";
 
 import { IWorld } from "../src/codegen/world/IWorld.sol";
 import { IArenaSystem } from "../src/codegen/world/IArenaSystem.sol";
@@ -66,6 +68,7 @@ contract CrystalForgeSystemTest is MudTest {
   address internal accountImplementation;
   address internal constant TOKEN_CONTRACT = address(0x7075E7);
   bytes32 internal constant ACCOUNT_SALT = bytes32(uint256(0xA71A));
+  uint256 internal constant MINT_PRICE = 0.01 ether;
 
   function setUp() public override {
     super.setUp();
@@ -277,11 +280,15 @@ contract CrystalForgeSystemTest is MudTest {
   }
 
   /// @dev Security note 2 in the System: minting before the account inputs are known would strand
-  /// every crystal at an address that can never be its account.
+  /// every crystal at an address that can never be its account. The price is set first so the
+  /// payment gate passes and this isolates the ForgeConfig gate.
   function testMintRevertsWhenNotConfigured() public {
+    _setMintPrice(MINT_PRICE);
+
+    vm.deal(alice, MINT_PRICE);
     vm.prank(alice);
     vm.expectRevert(ICrystalForgeSystem.CrystalForge_NotConfigured.selector);
-    IWorld(worldAddress).app__mintCrystal(bob);
+    IWorld(worldAddress).app__mintCrystal{ value: MINT_PRICE }(bob);
   }
 
   /// @dev Partial match on purpose: the error carries MUD's own formatted resource string, which is
@@ -321,6 +328,166 @@ contract CrystalForgeSystemTest is MudTest {
   }
 
   // ---------------------------------------------------------------------------------------------
+  // ETH gating (the sybil gate)
+  // ---------------------------------------------------------------------------------------------
+
+  /// @dev The sentinel earning its keep: an unset price must block minting outright, not silently
+  /// mean "free". A deployment that forgot to price the forge is the failure mode being prevented.
+  function testMintRevertsWhenNoPriceHasBeenSet() public {
+    vm.prank(deployer);
+    IWorld(worldAddress).app__configureForge(address(registry), accountImplementation, TOKEN_CONTRACT, ACCOUNT_SALT);
+
+    vm.deal(alice, 1 ether);
+    vm.prank(alice);
+    vm.expectRevert(ICrystalForgeSystem.CrystalForge_MintPriceNotConfigured.selector);
+    IWorld(worldAddress).app__mintCrystal{ value: 1 ether }(bob);
+  }
+
+  function testMintRevertsOnUnderpayment() public {
+    _configureForge();
+
+    vm.deal(alice, MINT_PRICE);
+    vm.prank(alice);
+    vm.expectRevert(
+      abi.encodeWithSelector(
+        ICrystalForgeSystem.CrystalForge_IncorrectPayment.selector,
+        MINT_PRICE,
+        MINT_PRICE - 1 wei
+      )
+    );
+    IWorld(worldAddress).app__mintCrystal{ value: MINT_PRICE - 1 wei }(bob);
+  }
+
+  /// @dev Overpaying reverts too. Returning change would mean sending ETH back mid-mint — a
+  /// reentrancy surface bought for nothing, since the price is readable before calling.
+  function testMintRevertsOnOverpaymentRatherThanRefunding() public {
+    _configureForge();
+
+    vm.deal(alice, MINT_PRICE + 1 wei);
+    vm.prank(alice);
+    vm.expectRevert(
+      abi.encodeWithSelector(
+        ICrystalForgeSystem.CrystalForge_IncorrectPayment.selector,
+        MINT_PRICE,
+        MINT_PRICE + 1 wei
+      )
+    );
+    IWorld(worldAddress).app__mintCrystal{ value: MINT_PRICE + 1 wei }(bob);
+  }
+
+  function testMintRevertsWithNoPaymentAtAll() public {
+    _configureForge();
+
+    vm.prank(alice);
+    vm.expectRevert(
+      abi.encodeWithSelector(ICrystalForgeSystem.CrystalForge_IncorrectPayment.selector, MINT_PRICE, 0)
+    );
+    IWorld(worldAddress).app__mintCrystal(bob);
+  }
+
+  /// @dev A genuinely free mint stays expressible — that is the whole point of separating
+  /// "configured" from "price". Testnets need it; silence must not provide it.
+  function testAFreeMintIsExpressibleButMustBeDeliberate() public {
+    _configureForge();
+    _setMintPrice(0);
+
+    vm.prank(alice);
+    (bytes32 entity, ) = IWorld(worldAddress).app__mintCrystal(bob);
+
+    assertEq(CrystalData.getLevel(entity), 1, "free mint still forges a real crystal");
+    assertEq(IWorld(worldAddress).app__mintRevenue(), 0, "and collects nothing");
+  }
+
+  /**
+   * @dev The finding this phase turned on: MUD credits the ETH to the namespace balance INSIDE the
+   * World and calls the System with `call{value: 0}`. So the revenue is held by the World, and the
+   * System's own balance is permanently zero — which is why `withdrawETH` over
+   * `address(this).balance` would have transferred nothing.
+   */
+  function testRevenueAccruesToTheWorldNotToTheSystem() public {
+    _configureForge();
+
+    uint256 worldBefore = worldAddress.balance;
+
+    _mint(alice, bob);
+    _mint(alice, bob);
+    _mint(alice, bob);
+
+    assertEq(IWorld(worldAddress).app__mintRevenue(), 3 * MINT_PRICE, "revenue tracked per namespace");
+    assertEq(worldAddress.balance - worldBefore, 3 * MINT_PRICE, "the ETH itself sits in the World");
+  }
+
+  /// @dev Withdrawal is MUD's own `transferBalanceToAddress`, gated on namespace access.
+  function testAdminCanWithdrawTheRevenue() public {
+    _configureForge();
+    _mint(alice, bob);
+    _mint(alice, bob);
+
+    uint256 collected = 2 * MINT_PRICE;
+    assertEq(IWorld(worldAddress).app__mintRevenue(), collected, "collected");
+
+    address treasury = address(0x7BEA5);
+    uint256 treasuryBefore = treasury.balance;
+
+    vm.prank(deployer);
+    IWorld(worldAddress).transferBalanceToAddress(_namespaceId(), treasury, collected);
+
+    assertEq(treasury.balance - treasuryBefore, collected, "the admin really receives the ETH");
+    assertEq(IWorld(worldAddress).app__mintRevenue(), 0, "namespace balance drained");
+  }
+
+  function testNonAdminCannotWithdrawTheRevenue() public {
+    _configureForge();
+    _mint(alice, bob);
+
+    vm.prank(stranger);
+    vm.expectPartialRevert(IWorldErrors.World_AccessDenied.selector);
+    IWorld(worldAddress).transferBalanceToAddress(_namespaceId(), stranger, MINT_PRICE);
+
+    assertEq(IWorld(worldAddress).app__mintRevenue(), MINT_PRICE, "revenue untouched");
+  }
+
+  function testWithdrawingMoreThanCollectedReverts() public {
+    _configureForge();
+    _mint(alice, bob);
+
+    vm.prank(deployer);
+    vm.expectPartialRevert(IWorldErrors.World_InsufficientBalance.selector);
+    IWorld(worldAddress).transferBalanceToAddress(_namespaceId(), deployer, MINT_PRICE + 1 wei);
+  }
+
+  function testSetMintPriceRequiresTheNamespaceOwner() public {
+    vm.prank(stranger);
+    vm.expectPartialRevert(IWorldErrors.World_AccessDenied.selector);
+    IWorld(worldAddress).app__setMintPrice(1 ether);
+  }
+
+  /**
+   * @dev The deliberate asymmetry with `configureForge`, which freezes on the first mint: identity
+   * derivation is permanent, but a price is an economic lever and must stay tunable forever.
+   */
+  function testMintPriceStaysTunableAfterTheFirstMintUnlikeForgeConfig() public {
+    _configureForge();
+    _mint(alice, bob);
+
+    _setMintPrice(1 ether);
+    (bool configured, uint256 price) = IWorld(worldAddress).app__mintPrice();
+    assertTrue(configured, "still configured");
+    assertEq(price, 1 ether, "price moved");
+
+    // ...while the identity config is frozen for good.
+    vm.prank(deployer);
+    vm.expectRevert(abi.encodeWithSelector(ICrystalForgeSystem.CrystalForge_AlreadyMinted.selector, 1));
+    IWorld(worldAddress).app__configureForge(address(registry), accountImplementation, TOKEN_CONTRACT, ACCOUNT_SALT);
+
+    // And the new price is the one enforced.
+    vm.deal(alice, 1 ether);
+    vm.prank(alice);
+    IWorld(worldAddress).app__mintCrystal{ value: 1 ether }(bob);
+    assertEq(IWorld(worldAddress).app__mintRevenue(), MINT_PRICE + 1 ether, "both mints collected");
+  }
+
+  // ---------------------------------------------------------------------------------------------
   // Event
   // ---------------------------------------------------------------------------------------------
 
@@ -340,21 +507,43 @@ contract CrystalForgeSystemTest is MudTest {
     vm.expectEmit(true, true, true, true);
     emit CrystalForgeSystem.CrystalForged(expectedEntity, expectedTokenId, bob, expectedAccount);
 
+    vm.deal(alice, MINT_PRICE);
     vm.prank(alice);
-    IWorld(worldAddress).app__mintCrystal(bob);
+    IWorld(worldAddress).app__mintCrystal{ value: MINT_PRICE }(bob);
+  }
+
+  function testSetMintPriceEmitsMintPriceSet() public {
+    vm.expectEmit(false, false, false, true);
+    emit CrystalForgeSystem.MintPriceSet(0.05 ether);
+
+    _setMintPrice(0.05 ether);
   }
 
   // ---------------------------------------------------------------------------------------------
   // Helpers
   // ---------------------------------------------------------------------------------------------
 
+  /// @dev The namespace that owns this System and holds its mint revenue.
+  function _namespaceId() internal pure returns (ResourceId) {
+    return WorldResourceIdLib.encodeNamespace("app");
+  }
+
+  /// @dev Sets the ERC-6551 inputs AND a mint price: since phase 6 a forge with no price cannot
+  /// mint at all, so every test that mints needs both.
   function _configureForge() internal {
     vm.prank(deployer);
     IWorld(worldAddress).app__configureForge(address(registry), accountImplementation, TOKEN_CONTRACT, ACCOUNT_SALT);
+    _setMintPrice(MINT_PRICE);
+  }
+
+  function _setMintPrice(uint256 price) internal {
+    vm.prank(deployer);
+    IWorld(worldAddress).app__setMintPrice(price);
   }
 
   function _mint(address minter, address to) internal returns (bytes32 entity, uint256 tokenId) {
+    vm.deal(minter, MINT_PRICE);
     vm.prank(minter);
-    (entity, tokenId) = IWorld(worldAddress).app__mintCrystal(to);
+    (entity, tokenId) = IWorld(worldAddress).app__mintCrystal{ value: MINT_PRICE }(to);
   }
 }

@@ -14,6 +14,8 @@ interface ICrystalForgeSystem {
   error CrystalForge_InvalidConfig();
   error CrystalForge_AlreadyMinted(uint256 minted);
   error CrystalForge_EntityCollision(bytes32 entity, uint256 tokenId);
+  error CrystalForge_MintPriceNotConfigured();
+  error CrystalForge_IncorrectPayment(uint256 expected, uint256 provided);
 
   function app__configureForge(
     address accountRegistry,
@@ -22,9 +24,15 @@ interface ICrystalForgeSystem {
     bytes32 accountSalt
   ) external;
 
-  function app__mintCrystal(address to) external returns (bytes32 entity, uint256 tokenId);
+  function app__setMintPrice(uint256 price) external;
+
+  function app__mintCrystal(address to) external payable returns (bytes32 entity, uint256 tokenId);
 
   function app__crystalAccountOf(uint256 tokenId) external view returns (address);
 
   function app__crystalEntityOf(uint256 tokenId) external view returns (bytes32);
+
+  function app__mintRevenue() external view returns (uint256);
+
+  function app__mintPrice() external view returns (bool configured, uint256 price);
 }

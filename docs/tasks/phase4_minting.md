@@ -88,11 +88,9 @@ the id, which keeps uniqueness by construction while removing trivial enumerabil
 
 ## 4. Open points
 
-1. **Minting is permissionless and free.** Anyone may mint, for anyone, without limit or cost beyond
-   gas. This matched the phase specification and was deliberately not fixed here, but it is an open
-   economic hole: crystals are the entry point to the arena, so an unbounded free supply undermines
-   any scarcity the game later relies on. Gating (payment, allowlist, per-address cap) belongs to the
-   phase that defines the economy.
+1. ~~**Minting is permissionless and free.**~~ **Closed in phase 6.** Minting still needs no
+   permission, but it now costs exactly `MintPrice.price` in native ETH, which prices the sybil
+   attack rather than forbidding it. See `phase6_economy.md`.
 2. **`CrystalOwner` must be retired or demoted** when the ERC-721 facade lands. See §2.
 3. ~~**A fresh crystal has no mana.**~~ **Closed in phase 5.** `ProgressionSystem.claimStarterMana`
    grants 100 ether once per crystal, so a forged crystal can now fund itself into the arena with no

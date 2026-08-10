@@ -14,6 +14,7 @@ interface IProgressionSystem {
   error Progression_InsufficientMana(bytes32 entity, uint128 balance, uint128 required);
   error Progression_MaxLevelReached(bytes32 entity, uint8 level);
   error Progression_ManaOverflow(bytes32 entity);
+  error Progression_CostOverflow(uint8 level);
 
   function app__claimStarterMana() external returns (uint128 amount);
 
