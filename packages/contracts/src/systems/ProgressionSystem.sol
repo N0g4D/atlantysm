@@ -3,7 +3,7 @@ pragma solidity >=0.8.24;
 
 import { System } from "@latticexyz/world/src/System.sol";
 
-import { CrystalData, ManaBalance, StarterManaClaimed } from "../codegen/index.sol";
+import { CrystalData, ManaBalance, ManaSupply, StarterManaClaimed } from "../codegen/index.sol";
 
 /**
  * @title ProgressionSystem
@@ -72,6 +72,10 @@ import { CrystalData, ManaBalance, StarterManaClaimed } from "../codegen/index.s
  *    assumption of a fixed supply. Note that `ArenaSystem`'s conservation invariant is unaffected:
  *    it asserts that *settlement* neither mints nor burns, which remains true. Only the global
  *    supply moves, and only through this System.
+ *    Since phase 7 that movement is also RECORDED, in `ManaSupply`, because the ERC-20 facade has to
+ *    answer `totalSupply` and summing `ManaBalance` on-chain is impossible. This System is the sole
+ *    writer of that figure: a mana transfer between two holders is neither issuance nor destruction
+ *    and correctly leaves it alone.
  *
  * 5. THE FAUCET IS FREE AND UNGATED BEYOND ONE-PER-CRYSTAL. Minting is itself permissionless and
  *    free (see `CrystalForgeSystem` note 1), so anyone can forge N crystals and drain N grants.
@@ -136,6 +140,9 @@ contract ProgressionSystem is System {
     uint128 newBalance = uint128(credited);
     ManaBalance.setAmount(entity, newBalance);
 
+    // Issuance: the only place mana enters circulation.
+    ManaSupply.setValue(ManaSupply.getValue() + STARTER_MANA);
+
     amount = STARTER_MANA;
     emit StarterManaGranted(entity, amount, newBalance);
   }
@@ -164,6 +171,9 @@ contract ProgressionSystem is System {
     // re-entrant call can only overpay and never gain a free level (security note 2).
     uint128 newBalance = balance - cost;
     ManaBalance.setAmount(entity, newBalance);
+
+    // Destruction: the mana is burned, not moved, so circulating supply shrinks with it.
+    ManaSupply.setValue(ManaSupply.getValue() - cost);
 
     newLevel = level + 1;
     CrystalData.setLevel(entity, newLevel);

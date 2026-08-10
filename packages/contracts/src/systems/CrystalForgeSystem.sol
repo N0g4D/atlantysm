@@ -7,7 +7,8 @@ import { WorldResourceIdLib } from "@latticexyz/world/src/WorldResourceId.sol";
 import { ResourceId } from "@latticexyz/store/src/ResourceId.sol";
 import { Balances } from "@latticexyz/world/src/codegen/tables/Balances.sol";
 
-import { CrystalData, CrystalOwner, ForgeConfig, ForgeConfigData, ForgeNonce, MintPrice } from "../codegen/index.sol";
+import { CrystalData, CrystalOwner, CrystalBalance, ForgeConfig, ForgeConfigData, ForgeNonce, MintPrice, TokenFacade } from "../codegen/index.sol";
+import { CrystalIdentityLib } from "../libraries/CrystalIdentityLib.sol";
 
 /**
  * @title CrystalForgeSystem
@@ -36,7 +37,8 @@ import { CrystalData, CrystalOwner, ForgeConfig, ForgeConfigData, ForgeNonce, Mi
  *      placeholder address would be stranded there with no migration path.
  *
  * A human forges (`to` is an EOA, or any contract), but a crystal fights. Those are different
- * addresses on purpose, and `CrystalOwner` is what links them until the ERC-721 facade exists.
+ * addresses on purpose, and `CrystalOwner` is what links them — permanently, as the ERC-721
+ * facade projects that table rather than replacing it.
  *
  * ---------------------------------------------------------------------------------------------
  * TOKEN ID DERIVATION
@@ -64,10 +66,17 @@ import { CrystalData, CrystalOwner, ForgeConfig, ForgeConfigData, ForgeNonce, Mi
  * SECURITY NOTES
  * ---------------------------------------------------------------------------------------------
  *
- * 1. MINTING IS PERMISSIONLESS BUT NO LONGER FREE. Anyone may still call `mintCrystal` for any
- *    recipient, but each mint costs exactly `MintPrice.price` in native ETH. That price is the sybil
- *    gate for the whole economy: a crystal is the only way to draw the mana faucet, so an unpriced
- *    forge would make mana free and unbounded no matter what the faucet itself limits.
+ * 1. MINTING IS PERMISSIONLESS, PRICED, AND ROUTED THROUGH THE FACADE. Anyone may mint for any
+ *    recipient, but only by calling the ERC-721 facade, which forwards here; a direct call to this
+ *    System is rejected. That single path is what keeps MUD state and the ERC-721 `Transfer` event
+ *    from diverging — a mint that produced a crystal without announcing it is unreachable rather
+ *    than merely discouraged.
+ *    Each mint costs exactly `MintPrice.price` in native ETH. That price is the sybil gate for the
+ *    whole economy: a crystal is the only way to draw the mana faucet, so an unpriced forge would
+ *    make mana free and unbounded no matter what the faucet itself limits.
+ *    Note the side effect on entropy: `_msgSender()` is now always the facade, so the minter's own
+ *    address no longer contributes to the token id preimage. Uniqueness was never resting on it —
+ *    the monotonic nonce carries that — but the derivation is one input poorer than before.
  *    Payment must be EXACT. Underpaying reverts, and so does overpaying — no change is returned. A
  *    refund path would mean sending ETH back mid-mint, which is a reentrancy surface bought for
  *    nothing, since the caller already knows the price from `MintPrice` before sending.
@@ -99,10 +108,13 @@ import { CrystalData, CrystalOwner, ForgeConfig, ForgeConfigData, ForgeNonce, Mi
  *    (~2^-256) or on a future change to the preimage that reintroduces one. It is cheap and it turns
  *    the catastrophic case — overwriting a live crystal's data — into a revert.
  *
- * 5. `CrystalOwner` IS A STOPGAP WITH ONE WRITER. Until the ERC-721 facade exists this table is the
- *    only record of ownership and only this System writes it. When the facade lands, `ownerOf` must
- *    become authoritative and this table must be retired or demoted to a facade-maintained mirror.
- *    Leaving two independent writers for one fact is how ownership silently diverges.
+ * 5. `CrystalOwner` IS NOW THE AUTHORITATIVE OWNERSHIP LEDGER, NOT A STOPGAP. Phase 7 resolved this
+ *    the other way round from what phase 4 anticipated: rather than the ERC-721 becoming the source
+ *    of truth, the facade holds NO ownership state at all and projects this table. `ownerOf` and
+ *    `balanceOf` read it back through `TokenBridgeSystem`. There is exactly one writer per
+ *    operation — this System on mint, `TokenBridgeSystem` on transfer — so the two-writers
+ *    divergence that note warned about never materialised.
+ *    `CrystalBalance` is derived from this table and must move with it on every write.
  *
  * 6. A FRESH CRYSTAL HAS NO MANA. Minting writes `CrystalData` only. `ArenaSystem.createLobby`
  *    requires a non-zero wager backed by `ManaBalance`, so a newly forged crystal cannot enter the
@@ -138,6 +150,7 @@ contract CrystalForgeSystem is System {
   error CrystalForge_EntityCollision(bytes32 entity, uint256 tokenId);
   error CrystalForge_MintPriceNotConfigured();
   error CrystalForge_IncorrectPayment(uint256 expected, uint256 provided);
+  error CrystalForge_NotTheCrystalFacade(address caller);
 
   // -----------------------------------------------------------------------------------------
   // Configuration
@@ -200,6 +213,12 @@ contract CrystalForgeSystem is System {
    * @return tokenId The crystal's ERC-721 token id.
    */
   function mintCrystal(address to) public payable returns (bytes32 entity, uint256 tokenId) {
+    // Phase 7: the ERC-721 facade is the sole mint path, so every crystal that exists has a
+    // matching `Transfer` event. A MUD-side mint that skipped the event is not discouraged here,
+    // it is unreachable. Unset reads address(0), so this fails closed before configuration.
+    address facade = TokenFacade.getCrystalNft();
+    if (_msgSender() != facade) revert CrystalForge_NotTheCrystalFacade(_msgSender());
+
     if (to == address(0)) revert CrystalForge_ZeroRecipient();
 
     // The sybil gate. Checked before anything is derived or written.
@@ -225,14 +244,17 @@ contract CrystalForgeSystem is System {
     // forge-lint: disable-next-line(block-timestamp)
     tokenId = uint256(keccak256(abi.encodePacked(block.timestamp, _msgSender(), to, nonce)));
 
-    address account = _accountOf(config, tokenId);
-    entity = _entityOf(account);
+    address account = CrystalIdentityLib.accountOf(config, tokenId);
+    entity = CrystalIdentityLib.entityOf(account);
 
     // Backstop only; uniqueness comes from the nonce (security note 4).
     if (CrystalData.getLevel(entity) != 0) revert CrystalForge_EntityCollision(entity, tokenId);
 
     CrystalData.set(entity, tokenId, INITIAL_LEVEL);
     CrystalOwner.setOwner(entity, to);
+    // Derived counter for the ERC-721 facade's `balanceOf`; must move with every `CrystalOwner`
+    // write, here and in `TokenBridgeSystem.transferCrystal`.
+    CrystalBalance.setCount(to, CrystalBalance.getCount(to) + 1);
 
     emit CrystalForged(entity, tokenId, to, account);
   }
@@ -246,13 +268,13 @@ contract CrystalForgeSystem is System {
    * ERC-721 facade can resolve identity without re-implementing the derivation.
    */
   function crystalAccountOf(uint256 tokenId) public view returns (address) {
-    return _accountOf(ForgeConfig.get(), tokenId);
+    return CrystalIdentityLib.accountOf(ForgeConfig.get(), tokenId);
   }
 
   /// @notice The ECS entity a given token id maps to. No index is needed for this: the mapping is
   /// pure derivation, so a reverse lookup table would be redundant state to keep in sync.
   function crystalEntityOf(uint256 tokenId) public view returns (bytes32) {
-    return _entityOf(_accountOf(ForgeConfig.get(), tokenId));
+    return CrystalIdentityLib.entityOfToken(tokenId);
   }
 
   /**
@@ -275,38 +297,9 @@ contract CrystalForgeSystem is System {
   // Internals
   // -----------------------------------------------------------------------------------------
 
-  /**
-   * @dev ERC-6551 account address, per the final spec (registry v0.3.1). The account need not be
-   * deployed for this to be correct — CREATE2 makes the address deterministic and therefore usable
-   * as an identity before it holds any code, which is exactly what lets minting run ahead of the
-   * registry.
-   *
-   * creationCode = ERC-1167 header ++ implementation ++ ERC-1167 footer
-   *                ++ abi.encode(salt, chainId, tokenContract, tokenId)
-   * address      = CREATE2(registry, salt, keccak256(creationCode))
-   */
-  function _accountOf(ForgeConfigData memory config, uint256 tokenId) internal view returns (address) {
-    bytes memory creationCode = abi.encodePacked(
-      hex"3d60ad80600a3d3981f3363d3d373d3d3d363d73",
-      config.accountImplementation,
-      hex"5af43d82803e903d91602b57fd5bf3",
-      abi.encode(config.accountSalt, block.chainid, config.tokenContract, tokenId)
-    );
-
-    bytes32 create2Hash = keccak256(
-      abi.encodePacked(bytes1(0xff), config.accountRegistry, config.accountSalt, keccak256(creationCode))
-    );
-
-    // Standard CREATE2 address extraction: the low 20 bytes are the address by definition.
-    // forge-lint: disable-next-line(unsafe-typecast)
-    return address(uint160(uint256(create2Hash)));
-  }
-
-  /// @dev Must stay bit-identical to `ArenaSystem._entityOf`, or a minted crystal would be unable
-  /// to fight under its own identity.
-  function _entityOf(address account) internal pure returns (bytes32) {
-    return bytes32(uint256(uint160(account)));
-  }
+  // Identity derivation lives in `CrystalIdentityLib` since phase 7: `TokenBridgeSystem` needs the
+  // same `tokenId -> account -> entity` mapping, and two copies of an ERC-6551 CREATE2 derivation
+  // would diverge silently rather than loudly.
 
   /// @dev The namespace this System lives in, and whose owner administers it and holds its revenue.
   function _namespaceId() internal pure returns (ResourceId) {

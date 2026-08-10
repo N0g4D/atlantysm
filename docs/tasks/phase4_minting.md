@@ -91,7 +91,11 @@ the id, which keeps uniqueness by construction while removing trivial enumerabil
 1. ~~**Minting is permissionless and free.**~~ **Closed in phase 6.** Minting still needs no
    permission, but it now costs exactly `MintPrice.price` in native ETH, which prices the sybil
    attack rather than forbidding it. See `phase6_economy.md`.
-2. **`CrystalOwner` must be retired or demoted** when the ERC-721 facade lands. See §2.
+2. ~~**`CrystalOwner` must be retired or demoted** when the ERC-721 facade lands.~~ **Resolved in
+   phase 7, the other way round.** The facade holds no ownership state at all and projects this
+   table, so `CrystalOwner` became the permanent authoritative ledger rather than a stopgap. There is
+   exactly one writer per operation — the forge on mint, `TokenBridgeSystem` on transfer — so the
+   two-writers divergence this point warned about never arose. See `phase7_facades.md`.
 3. ~~**A fresh crystal has no mana.**~~ **Closed in phase 5.** `ProgressionSystem.claimStarterMana`
    grants 100 ether once per crystal, so a forged crystal can now fund itself into the arena with no
    admin involvement.

@@ -11,7 +11,9 @@ import { IProgressionSystem } from "../src/codegen/world/IProgressionSystem.sol"
 // Worldgen exposes errors but not events, so the event tests reference the System directly: a
 // signature change then breaks compilation instead of asserting a stale shape.
 import { ProgressionSystem } from "../src/systems/ProgressionSystem.sol";
-import { CrystalData, ManaBalance, StarterManaClaimed } from "../src/codegen/index.sol";
+import { CrystalNFT } from "../src/tokens/CrystalNFT.sol";
+import { ManaToken } from "../src/tokens/ManaToken.sol";
+import { CrystalData, ManaBalance, ManaSupply, StarterManaClaimed } from "../src/codegen/index.sol";
 import { Element } from "../src/codegen/common.sol";
 
 /// @dev Minimal ERC-6551 registry stand-in. Progression never deploys accounts — it only needs the
@@ -88,6 +90,10 @@ contract ProgressionSystemTest is MudTest {
 
   uint256 internal constant MINT_PRICE = 0.01 ether;
 
+  /// @dev The NFT facade is the only mint path since phase 7.
+  CrystalNFT internal nft;
+  ManaToken internal manaToken;
+
   function setUp() public override {
     super.setUp();
 
@@ -95,9 +101,13 @@ contract ProgressionSystemTest is MudTest {
     registry = address(new StubRegistry());
     accountImplementation = address(new StubAccountImplementation());
 
+    nft = new CrystalNFT(IWorld(worldAddress));
+    manaToken = new ManaToken(IWorld(worldAddress));
+
     vm.startPrank(deployer);
     IWorld(worldAddress).app__configureForge(registry, accountImplementation, TOKEN_CONTRACT, ACCOUNT_SALT);
     IWorld(worldAddress).app__setMintPrice(MINT_PRICE);
+    IWorld(worldAddress).app__setTokenFacades(address(nft), address(manaToken));
     vm.stopPrank();
   }
 
@@ -543,10 +553,10 @@ contract ProgressionSystemTest is MudTest {
   /// @dev Forge a crystal and return both its entity and the address that must call as it. The
   /// account is never deployed — phase 4 open point 2 — so tests reach it with `vm.prank`.
   function _forge() internal returns (bytes32 entity, address account) {
-    uint256 tokenId;
     vm.deal(human, MINT_PRICE);
     vm.prank(human);
-    (entity, tokenId) = IWorld(worldAddress).app__mintCrystal{ value: MINT_PRICE }(human);
+    uint256 tokenId = nft.mint{ value: MINT_PRICE }(human);
+    entity = IWorld(worldAddress).app__crystalEntityOf(tokenId);
     account = IWorld(worldAddress).app__crystalAccountOf(tokenId);
     assertEq(entity, _entityOf(account), "the entity must be the account, widened");
   }
@@ -571,10 +581,25 @@ contract ProgressionSystemTest is MudTest {
     IWorld(worldAddress).registerStoreHook(tableId, ReentrantLevelUpHook(account), AFTER_SPLICE_STATIC_DATA);
   }
 
-  /// @dev Seed mana directly where the faucet would be the wrong lever (boundary and ceiling tests).
+  /**
+   * @dev Seed mana directly where the faucet would be the wrong lever (boundary and ceiling tests).
+   *
+   * It must move `ManaSupply` by the same delta. That is not test bookkeeping for its own sake:
+   * `ManaSupply` is DERIVED state, and `levelUp` subtracts from it, so seeding a balance without it
+   * makes the next level-up underflow. Any future System that writes `ManaBalance` outside the
+   * faucet inherits exactly this obligation.
+   */
   function _fund(bytes32 entity, uint128 amount) internal {
-    vm.prank(deployer);
+    uint128 previous = ManaBalance.getAmount(entity);
+
+    vm.startPrank(deployer);
     ManaBalance.setAmount(entity, amount);
+    if (amount >= previous) {
+      ManaSupply.setValue(ManaSupply.getValue() + (amount - previous));
+    } else {
+      ManaSupply.setValue(ManaSupply.getValue() - (previous - amount));
+    }
+    vm.stopPrank();
   }
 
   function _trackedSupply(bytes32 entity) internal view returns (uint256) {

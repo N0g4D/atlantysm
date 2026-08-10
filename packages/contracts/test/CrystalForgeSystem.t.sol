@@ -12,6 +12,8 @@ import { ICrystalForgeSystem } from "../src/codegen/world/ICrystalForgeSystem.so
 // Worldgen exposes errors but not events, so the event test references the System directly; a
 // signature change then breaks compilation instead of asserting a stale shape.
 import { CrystalForgeSystem } from "../src/systems/CrystalForgeSystem.sol";
+import { CrystalNFT } from "../src/tokens/CrystalNFT.sol";
+import { ManaToken } from "../src/tokens/ManaToken.sol";
 import { CrystalData, CrystalOwner, ForgeConfig, ManaBalance } from "../src/codegen/index.sol";
 import { Element } from "../src/codegen/common.sol";
 
@@ -70,12 +72,21 @@ contract CrystalForgeSystemTest is MudTest {
   bytes32 internal constant ACCOUNT_SALT = bytes32(uint256(0xA71A));
   uint256 internal constant MINT_PRICE = 0.01 ether;
 
+  /// @dev Since phase 7 the NFT facade is the only mint path, so every test needs one.
+  CrystalNFT internal nft;
+  ManaToken internal manaToken;
+
   function setUp() public override {
     super.setUp();
 
     deployer = vm.addr(vm.envUint("PRIVATE_KEY"));
     registry = new ReferenceERC6551Registry();
     accountImplementation = address(new MockAccount());
+
+    nft = new CrystalNFT(IWorld(worldAddress));
+    manaToken = new ManaToken(IWorld(worldAddress));
+    vm.prank(deployer);
+    IWorld(worldAddress).app__setTokenFacades(address(nft), address(manaToken));
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -276,7 +287,7 @@ contract CrystalForgeSystemTest is MudTest {
 
     vm.prank(alice);
     vm.expectRevert(ICrystalForgeSystem.CrystalForge_ZeroRecipient.selector);
-    IWorld(worldAddress).app__mintCrystal(address(0));
+    nft.mint(address(0));
   }
 
   /// @dev Security note 2 in the System: minting before the account inputs are known would strand
@@ -288,7 +299,7 @@ contract CrystalForgeSystemTest is MudTest {
     vm.deal(alice, MINT_PRICE);
     vm.prank(alice);
     vm.expectRevert(ICrystalForgeSystem.CrystalForge_NotConfigured.selector);
-    IWorld(worldAddress).app__mintCrystal{ value: MINT_PRICE }(bob);
+    nft.mint{ value: MINT_PRICE }(bob);
   }
 
   /// @dev Partial match on purpose: the error carries MUD's own formatted resource string, which is
@@ -340,7 +351,7 @@ contract CrystalForgeSystemTest is MudTest {
     vm.deal(alice, 1 ether);
     vm.prank(alice);
     vm.expectRevert(ICrystalForgeSystem.CrystalForge_MintPriceNotConfigured.selector);
-    IWorld(worldAddress).app__mintCrystal{ value: 1 ether }(bob);
+    nft.mint{ value: 1 ether }(bob);
   }
 
   function testMintRevertsOnUnderpayment() public {
@@ -355,7 +366,7 @@ contract CrystalForgeSystemTest is MudTest {
         MINT_PRICE - 1 wei
       )
     );
-    IWorld(worldAddress).app__mintCrystal{ value: MINT_PRICE - 1 wei }(bob);
+    nft.mint{ value: MINT_PRICE - 1 wei }(bob);
   }
 
   /// @dev Overpaying reverts too. Returning change would mean sending ETH back mid-mint — a
@@ -372,7 +383,7 @@ contract CrystalForgeSystemTest is MudTest {
         MINT_PRICE + 1 wei
       )
     );
-    IWorld(worldAddress).app__mintCrystal{ value: MINT_PRICE + 1 wei }(bob);
+    nft.mint{ value: MINT_PRICE + 1 wei }(bob);
   }
 
   function testMintRevertsWithNoPaymentAtAll() public {
@@ -382,7 +393,7 @@ contract CrystalForgeSystemTest is MudTest {
     vm.expectRevert(
       abi.encodeWithSelector(ICrystalForgeSystem.CrystalForge_IncorrectPayment.selector, MINT_PRICE, 0)
     );
-    IWorld(worldAddress).app__mintCrystal(bob);
+    nft.mint(bob);
   }
 
   /// @dev A genuinely free mint stays expressible — that is the whole point of separating
@@ -392,7 +403,8 @@ contract CrystalForgeSystemTest is MudTest {
     _setMintPrice(0);
 
     vm.prank(alice);
-    (bytes32 entity, ) = IWorld(worldAddress).app__mintCrystal(bob);
+    uint256 freeTokenId = nft.mint(bob);
+    bytes32 entity = IWorld(worldAddress).app__crystalEntityOf(freeTokenId);
 
     assertEq(CrystalData.getLevel(entity), 1, "free mint still forges a real crystal");
     assertEq(IWorld(worldAddress).app__mintRevenue(), 0, "and collects nothing");
@@ -483,7 +495,7 @@ contract CrystalForgeSystemTest is MudTest {
     // And the new price is the one enforced.
     vm.deal(alice, 1 ether);
     vm.prank(alice);
-    IWorld(worldAddress).app__mintCrystal{ value: 1 ether }(bob);
+    nft.mint{ value: 1 ether }(bob);
     assertEq(IWorld(worldAddress).app__mintRevenue(), MINT_PRICE + 1 ether, "both mints collected");
   }
 
@@ -498,8 +510,10 @@ contract CrystalForgeSystemTest is MudTest {
 
     // Derived ahead of the call so the expected topics are known: the derivation is deterministic
     // given the nonce, which is 1 for the first mint.
+    // The minter no longer appears in the preimage: since phase 7 `_msgSender()` inside the forge
+    // is always the NFT facade. Uniqueness rests on the nonce, not on the caller.
     uint256 expectedTokenId = uint256(
-      keccak256(abi.encodePacked(block.timestamp, alice, bob, uint256(1)))
+      keccak256(abi.encodePacked(block.timestamp, address(nft), bob, uint256(1)))
     );
     address expectedAccount = IWorld(worldAddress).app__crystalAccountOf(expectedTokenId);
     bytes32 expectedEntity = bytes32(uint256(uint160(expectedAccount)));
@@ -509,7 +523,7 @@ contract CrystalForgeSystemTest is MudTest {
 
     vm.deal(alice, MINT_PRICE);
     vm.prank(alice);
-    IWorld(worldAddress).app__mintCrystal{ value: MINT_PRICE }(bob);
+    nft.mint{ value: MINT_PRICE }(bob);
   }
 
   function testSetMintPriceEmitsMintPriceSet() public {
@@ -544,6 +558,7 @@ contract CrystalForgeSystemTest is MudTest {
   function _mint(address minter, address to) internal returns (bytes32 entity, uint256 tokenId) {
     vm.deal(minter, MINT_PRICE);
     vm.prank(minter);
-    (entity, tokenId) = IWorld(worldAddress).app__mintCrystal{ value: MINT_PRICE }(to);
+    tokenId = nft.mint{ value: MINT_PRICE }(to);
+    entity = IWorld(worldAddress).app__crystalEntityOf(tokenId);
   }
 }

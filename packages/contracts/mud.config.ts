@@ -153,6 +153,61 @@ export default defineWorld({
     },
 
     /**
+     * Number of crystals held per owner. Exists solely so the ERC-721 facade can answer
+     * `balanceOf` — `CrystalOwner` maps entity to owner, and inverting that on-chain would mean
+     * iterating every entity, which is exactly the "impossible loop" a counter avoids.
+     *
+     * It is derived state and therefore a consistency risk: it must be updated by every write that
+     * touches `CrystalOwner`, and nothing else may write it. Both writers live in the `app`
+     * namespace (`CrystalForgeSystem` on mint, `TokenBridgeSystem` on transfer) and the test suite
+     * asserts the two stay in agreement.
+     *
+     * Static width: 32 bytes, one slot.
+     */
+    CrystalBalance: {
+      schema: {
+        owner: "address",
+        count: "uint256",
+      },
+      key: ["owner"],
+    },
+
+    /**
+     * Circulating mana, for the ERC-20 facade's `totalSupply`. Same reasoning as `CrystalBalance`:
+     * summing `ManaBalance` on-chain is impossible, so the figure has to be maintained.
+     *
+     * Only `ProgressionSystem` moves it — the faucet mints and levelling burns. Arena settlement is
+     * zero-sum and deliberately does NOT touch it, and a mana transfer between two holders does not
+     * either.
+     *
+     * Static width: 32 bytes, one slot.
+     */
+    ManaSupply: {
+      schema: {
+        value: "uint256",
+      },
+      key: [],
+    },
+
+    /**
+     * Addresses of the two token facades. Singleton.
+     *
+     * This is the access-control anchor for the whole phase: the token Systems accept calls from
+     * these addresses and from nobody else, which is what keeps the ERC-721/ERC-20 surface from
+     * becoming a second, unguarded way to rewrite ownership or mana. Unset reads as address(0),
+     * which no caller can ever be, so the gate fails closed before it is configured.
+     *
+     * Static width: 40 bytes, two slots.
+     */
+    TokenFacade: {
+      schema: {
+        crystalNft: "address",
+        manaToken: "address",
+      },
+      key: [],
+    },
+
+    /**
      * Price of one mint, in native ETH wei. Singleton. This is the sybil gate: it is what stops the
      * forge — and through the faucet, the mana supply — from being an infinite free printer.
      *

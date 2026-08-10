@@ -16,6 +16,7 @@ interface ICrystalForgeSystem {
   error CrystalForge_EntityCollision(bytes32 entity, uint256 tokenId);
   error CrystalForge_MintPriceNotConfigured();
   error CrystalForge_IncorrectPayment(uint256 expected, uint256 provided);
+  error CrystalForge_NotTheCrystalFacade(address caller);
 
   function app__configureForge(
     address accountRegistry,
