@@ -10,6 +10,10 @@ import { AFTER_SET_RECORD, BEFORE_SPLICE_STATIC_DATA } from "@latticexyz/store/s
 
 import { IWorld } from "../src/codegen/world/IWorld.sol";
 import { IArenaSystem } from "../src/codegen/world/IArenaSystem.sol";
+// Worldgen puts the System's errors on IArenaSystem but not its events, so the event tests below
+// reference the definition on the System itself. A signature change then breaks compilation rather
+// than silently asserting a stale shape.
+import { ArenaSystem } from "../src/systems/ArenaSystem.sol";
 import { ArenaLobby, ArenaLobbyData, CrystalData, ManaBalance, MatchCommitment } from "../src/codegen/index.sol";
 import { Element, LobbyStatus } from "../src/codegen/common.sol";
 
@@ -152,7 +156,7 @@ contract ArenaSystemTest is MudTest {
     assertEq(lobby.matchedAt, 0, "reveal clock must not start before a match");
     assertEq(uint8(lobby.status), uint8(LobbyStatus.Open), "status");
 
-    assertEq(MatchCommitment.getCommitment(lobbyId, aliceEntity), _commit(Element.Fire, C_SALT), "commitment");
+    assertEq(MatchCommitment.getCommitment(lobbyId, aliceEntity), _commit(lobbyId, alice, Element.Fire, C_SALT), "commitment");
     assertEq(uint8(MatchCommitment.getMove(lobbyId, aliceEntity)), uint8(Element.None), "move must stay hidden");
     assertFalse(MatchCommitment.getRevealed(lobbyId, aliceEntity), "revealed");
 
@@ -162,13 +166,17 @@ contract ArenaSystemTest is MudTest {
   function testCreateLobbyRevertsForUnknownCrystal() public {
     vm.prank(stranger);
     vm.expectRevert(abi.encodeWithSelector(IArenaSystem.ArenaSystem_UnknownCrystal.selector, strangerEntity));
-    IWorld(worldAddress).app__createLobby(LOBBY_SALT, WAGER, _commit(Element.Fire, C_SALT));
+    IWorld(worldAddress).app__createLobby(
+      LOBBY_SALT,
+      WAGER,
+      _commit(_lobbyIdFor(stranger, LOBBY_SALT), stranger, Element.Fire, C_SALT)
+    );
   }
 
   function testCreateLobbyRevertsOnZeroWager() public {
     vm.prank(alice);
     vm.expectRevert(IArenaSystem.ArenaSystem_ZeroWager.selector);
-    IWorld(worldAddress).app__createLobby(LOBBY_SALT, 0, _commit(Element.Fire, C_SALT));
+    IWorld(worldAddress).app__createLobby(LOBBY_SALT, 0, _commit(_lobbyIdFor(alice, LOBBY_SALT), alice, Element.Fire, C_SALT));
   }
 
   function testCreateLobbyRevertsOnEmptyCommitment() public {
@@ -182,7 +190,11 @@ contract ArenaSystemTest is MudTest {
     vm.expectRevert(
       abi.encodeWithSelector(IArenaSystem.ArenaSystem_InsufficientMana.selector, aliceEntity, FUNDING, FUNDING + 1)
     );
-    IWorld(worldAddress).app__createLobby(LOBBY_SALT, FUNDING + 1, _commit(Element.Fire, C_SALT));
+    IWorld(worldAddress).app__createLobby(
+      LOBBY_SALT,
+      FUNDING + 1,
+      _commit(_lobbyIdFor(alice, LOBBY_SALT), alice, Element.Fire, C_SALT)
+    );
   }
 
   function testCreateLobbyRevertsOnReusedSalt() public {
@@ -190,7 +202,7 @@ contract ArenaSystemTest is MudTest {
 
     vm.prank(alice);
     vm.expectRevert(abi.encodeWithSelector(IArenaSystem.ArenaSystem_LobbyAlreadyExists.selector, lobbyId));
-    IWorld(worldAddress).app__createLobby(LOBBY_SALT, WAGER, _commit(Element.Water, C_SALT));
+    IWorld(worldAddress).app__createLobby(LOBBY_SALT, WAGER, _commit(lobbyId, alice, Element.Water, C_SALT));
   }
 
   /// @dev Security note 3: the id is namespaced by the challenger, so a front-runner reusing the
@@ -220,7 +232,7 @@ contract ArenaSystemTest is MudTest {
     assertEq(lobby.matchedAt, uint32(block.timestamp), "clock starts at join, not at creation");
     assertTrue(lobby.matchedAt > lobby.createdAt, "matchedAt must be independent of createdAt");
 
-    assertEq(MatchCommitment.getCommitment(lobbyId, bobEntity), _commit(Element.Water, O_SALT), "commitment");
+    assertEq(MatchCommitment.getCommitment(lobbyId, bobEntity), _commit(lobbyId, bob, Element.Water, O_SALT), "commitment");
     assertEq(ManaBalance.getAmount(bobEntity), FUNDING - WAGER, "wager must leave the opponent");
   }
 
@@ -229,7 +241,7 @@ contract ArenaSystemTest is MudTest {
 
     vm.prank(alice);
     vm.expectRevert(abi.encodeWithSelector(IArenaSystem.ArenaSystem_SelfMatch.selector, aliceEntity));
-    IWorld(worldAddress).app__joinLobby(lobbyId, _commit(Element.Water, O_SALT));
+    IWorld(worldAddress).app__joinLobby(lobbyId, _commit(lobbyId, alice, Element.Water, O_SALT));
   }
 
   function testJoinLobbyRevertsForUnknownCrystal() public {
@@ -237,7 +249,7 @@ contract ArenaSystemTest is MudTest {
 
     vm.prank(stranger);
     vm.expectRevert(abi.encodeWithSelector(IArenaSystem.ArenaSystem_UnknownCrystal.selector, strangerEntity));
-    IWorld(worldAddress).app__joinLobby(lobbyId, _commit(Element.Water, O_SALT));
+    IWorld(worldAddress).app__joinLobby(lobbyId, _commit(lobbyId, stranger, Element.Water, O_SALT));
   }
 
   function testJoinLobbyRevertsOnEmptyCommitment() public {
@@ -254,7 +266,7 @@ contract ArenaSystemTest is MudTest {
 
     vm.prank(dave);
     vm.expectRevert(abi.encodeWithSelector(IArenaSystem.ArenaSystem_LobbyNotOpen.selector, lobbyId));
-    IWorld(worldAddress).app__joinLobby(lobbyId, _commit(Element.Earth, O_SALT));
+    IWorld(worldAddress).app__joinLobby(lobbyId, _commit(lobbyId, dave, Element.Earth, O_SALT));
   }
 
   /// @dev A never-written lobby id reads back as `LobbyStatus.None`, which the sentinel keeps
@@ -264,7 +276,7 @@ contract ArenaSystemTest is MudTest {
 
     vm.prank(bob);
     vm.expectRevert(abi.encodeWithSelector(IArenaSystem.ArenaSystem_LobbyNotOpen.selector, ghost));
-    IWorld(worldAddress).app__joinLobby(ghost, _commit(Element.Water, O_SALT));
+    IWorld(worldAddress).app__joinLobby(ghost, _commit(ghost, bob, Element.Water, O_SALT));
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -323,6 +335,53 @@ contract ArenaSystemTest is MudTest {
     vm.prank(alice);
     vm.expectRevert(IArenaSystem.ArenaSystem_InvalidMove.selector);
     IWorld(worldAddress).app__revealMove(lobbyId, Element.None, C_SALT);
+  }
+
+  /**
+   * @dev Security note 5, lobby half. Alice submits, for a second lobby, the commitment she built
+   * for a first one. The (move, salt) pair is genuine and she is a legitimate participant — only
+   * the bound lobby id differs, and that alone must make the commitment unopenable.
+   */
+  function testCommitmentCannotBeReplayedAcrossMatches() public {
+    bytes32 first = _lobbyIdFor(alice, keccak256("first"));
+    bytes32 boundToFirst = _commit(first, alice, Element.Fire, C_SALT);
+
+    vm.prank(alice);
+    bytes32 second = IWorld(worldAddress).app__createLobby(keccak256("second"), WAGER, boundToFirst);
+    assertTrue(first != second, "the two lobbies must differ or this proves nothing");
+    _join(bob, second, Element.Water, O_SALT);
+
+    vm.prank(alice);
+    vm.expectRevert(abi.encodeWithSelector(IArenaSystem.ArenaSystem_CommitmentMismatch.selector, second, aliceEntity));
+    IWorld(worldAddress).app__revealMove(second, Element.Fire, C_SALT);
+  }
+
+  /**
+   * @dev Security note 5, player half. Bob joins with a commitment bound to alice's entity. Same
+   * lobby, genuine (move, salt) — but a commitment cannot be worn by another player.
+   */
+  function testCommitmentCannotBeLiftedOntoAnotherPlayer() public {
+    bytes32 lobbyId = _open(alice, LOBBY_SALT, WAGER, Element.Fire, C_SALT);
+
+    vm.prank(bob);
+    IWorld(worldAddress).app__joinLobby(lobbyId, _commit(lobbyId, alice, Element.Water, O_SALT));
+
+    vm.prank(bob);
+    vm.expectRevert(abi.encodeWithSelector(IArenaSystem.ArenaSystem_CommitmentMismatch.selector, lobbyId, bobEntity));
+    IWorld(worldAddress).app__revealMove(lobbyId, Element.Water, O_SALT);
+  }
+
+  /// @dev The flip side of binding: the same salt reused in a *correctly* bound commitment is still
+  /// perfectly valid, so binding constrains replay without forcing clients to rotate salts.
+  function testCorrectlyBoundCommitmentAcceptsAReusedSalt() public {
+    bytes32 first = _playOut(alice, Element.Fire, bob, Element.Water, keccak256("first"), WAGER);
+    bytes32 second = _playOut(alice, Element.Fire, bob, Element.Water, keccak256("second"), WAGER);
+
+    assertTrue(
+      MatchCommitment.getCommitment(first, aliceEntity) != MatchCommitment.getCommitment(second, aliceEntity),
+      "identical move and salt must still hash differently per lobby"
+    );
+    assertTrue(MatchCommitment.getRevealed(second, aliceEntity), "and must still open correctly");
   }
 
   function testRevealRevertsAfterTheDeadline() public {
@@ -552,6 +611,57 @@ contract ArenaSystemTest is MudTest {
   }
 
   // ---------------------------------------------------------------------------------------------
+  // MatchResolved event
+  // ---------------------------------------------------------------------------------------------
+
+  /**
+   * @dev Indexers and clients reconstruct match history from this event alone, so its arguments are
+   * part of the System's public surface. Both topics and the data body are checked exactly.
+   * The emitter address is deliberately left unchecked: `app` is a namespaced System, so the World
+   * `call`s it instead of delegatecalling, and the log therefore originates from the System's own
+   * address rather than the World's.
+   */
+  function testMatchResolvedCarriesWinnerAndFullPot() public {
+    bytes32 lobbyId = _playOut(alice, Element.Water, bob, Element.Fire, LOBBY_SALT, WAGER);
+
+    vm.expectEmit(true, true, false, true);
+    emit ArenaSystem.MatchResolved(lobbyId, aliceEntity, WAGER * 2);
+    IWorld(worldAddress).app__resolveMatch(lobbyId);
+  }
+
+  /// @dev A draw refunds each side its own wager, so no pot ever moves: the event must say so with
+  /// a zero winner AND a zero pot, never a winner with an empty pot.
+  function testMatchResolvedReportsZeroWinnerAndZeroPotOnDraw() public {
+    bytes32 lobbyId = _playOut(alice, Element.Fire, dave, Element.Fire, LOBBY_SALT, WAGER);
+
+    vm.expectEmit(true, true, false, true);
+    emit ArenaSystem.MatchResolved(lobbyId, bytes32(0), 0);
+    IWorld(worldAddress).app__resolveMatch(lobbyId);
+  }
+
+  /// @dev The forfeit path settles from a different branch and must announce the identical shape.
+  function testMatchResolvedOnTimeoutForfeit() public {
+    bytes32 lobbyId = _match(alice, Element.Water, bob, Element.Fire, LOBBY_SALT, WAGER);
+    _reveal(alice, lobbyId, Element.Water, C_SALT);
+    vm.warp(block.timestamp + REVEAL_WINDOW + 1);
+
+    vm.expectEmit(true, true, false, true);
+    emit ArenaSystem.MatchResolved(lobbyId, aliceEntity, WAGER * 2);
+    IWorld(worldAddress).app__claimTimeout(lobbyId);
+  }
+
+  /// @dev The no-show branch ends `Cancelled` rather than `Resolved`, but still announces closure so
+  /// consumers can retire the lobby from their view.
+  function testMatchResolvedOnNoShow() public {
+    bytes32 lobbyId = _match(alice, Element.Fire, bob, Element.Water, LOBBY_SALT, WAGER);
+    vm.warp(block.timestamp + REVEAL_WINDOW + 1);
+
+    vm.expectEmit(true, true, false, true);
+    emit ArenaSystem.MatchResolved(lobbyId, bytes32(0), 0);
+    IWorld(worldAddress).app__claimTimeout(lobbyId);
+  }
+
+  // ---------------------------------------------------------------------------------------------
   // Reentrancy
   // ---------------------------------------------------------------------------------------------
 
@@ -594,7 +704,7 @@ contract ArenaSystemTest is MudTest {
 
     ReentrantHook hook = _installHook(ArenaLobby._tableId, AFTER_SET_RECORD);
     _seedCrystal(address(hook), 99, 9, FUNDING); // the attacker needs a crystal of its own
-    hook.arm(hook.MODE_JOIN(), lobbyId, _commit(Element.Earth, O_SALT));
+    hook.arm(hook.MODE_JOIN(), lobbyId, _commit(lobbyId, address(hook), Element.Earth, O_SALT));
 
     _join(bob, lobbyId, Element.Water, O_SALT);
 
@@ -664,8 +774,15 @@ contract ArenaSystemTest is MudTest {
     return bytes32(uint256(uint160(account)));
   }
 
-  function _commit(Element move, bytes32 salt) internal pure returns (bytes32) {
-    return keccak256(abi.encodePacked(move, salt));
+  /// @dev Mirrors the id derivation in `createLobby`. The commitment binding makes this a client
+  /// requirement, not a convenience: the challenger must know the lobby id before it exists.
+  function _lobbyIdFor(address challenger, bytes32 lobbySalt) internal pure returns (bytes32) {
+    return keccak256(abi.encode(_entityOf(challenger), lobbySalt));
+  }
+
+  /// @dev Mirrors `ArenaSystem._commitmentOf`. Bound to the lobby and the player, see security note 5.
+  function _commit(bytes32 lobbyId, address player, Element move, bytes32 salt) internal pure returns (bytes32) {
+    return keccak256(abi.encodePacked(lobbyId, _entityOf(player), move, salt));
   }
 
   /// @dev No minting System exists yet, so state is seeded as the namespace owner.
@@ -696,13 +813,19 @@ contract ArenaSystemTest is MudTest {
     Element move,
     bytes32 salt
   ) internal returns (bytes32 lobbyId) {
+    bytes32 predicted = _lobbyIdFor(challenger, lobbySalt);
+
     vm.prank(challenger);
-    lobbyId = IWorld(worldAddress).app__createLobby(lobbySalt, wager, _commit(move, salt));
+    lobbyId = IWorld(worldAddress).app__createLobby(lobbySalt, wager, _commit(predicted, challenger, move, salt));
+
+    // The binding is only usable if the id is predictable off-chain; if this ever drifts, every
+    // commitment in the suite would be built against the wrong lobby.
+    assertEq(lobbyId, predicted, "lobby id must be derivable client-side before the call");
   }
 
   function _join(address opponent, bytes32 lobbyId, Element move, bytes32 salt) internal {
     vm.prank(opponent);
-    IWorld(worldAddress).app__joinLobby(lobbyId, _commit(move, salt));
+    IWorld(worldAddress).app__joinLobby(lobbyId, _commit(lobbyId, opponent, move, salt));
   }
 
   function _reveal(address player, bytes32 lobbyId, Element move, bytes32 salt) internal {

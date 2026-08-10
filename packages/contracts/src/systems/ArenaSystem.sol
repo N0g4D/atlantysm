@@ -66,13 +66,22 @@ import { Element, LobbyStatus } from "../codegen/common.sol";
  *    withholding a reveal never beats revealing. Reveals are hard-closed at the deadline and
  *    `claimTimeout` only opens after it, so the two can never race in the same block.
  *
- * 5. COMMITMENT SCOPE. The commitment is `keccak256(abi.encodePacked(move, salt))`, as specified.
- *    It is bound to neither the lobby nor the player, so the same commitment can be replayed across
- *    matches: an observer who learns a (move, salt) pair from one revealed match can recognise it
- *    if it is reused. Clients MUST draw a fresh random salt per match. Binding the hash to
- *    `(lobbyId, playerEntity, move, salt)` would enforce that in the contract instead of relying on
- *    client discipline. Note also that a move has only three values, so a low-entropy salt is
- *    brute-forceable in milliseconds — the salt is what hides the move, not the hash.
+ * 5. COMMITMENT BINDING, AND WHAT IT DOES NOT BUY. The commitment is
+ *    `keccak256(abi.encodePacked(lobbyId, playerEntity, move, salt))`. Both bound values are public
+ *    and fixed before the hash is ever opened, so binding them costs nothing in hiding power while
+ *    domain-separating every commitment: a (move, salt) pair learned from one revealed match hashes
+ *    differently in any other match and under any other entity. Commitments therefore cannot be
+ *    replayed across matches nor lifted from one player onto another, and no precomputed table can
+ *    be amortised across matches.
+ *    It does NOT make a weak salt safe. `lobbyId` and `playerEntity` are both public, so against a
+ *    low-entropy salt the three candidate moves stay brute-forceable in milliseconds — now per
+ *    match rather than once globally, which raises the cost of a mass sweep but not of a targeted
+ *    one. The salt is what hides the move; the binding only stops reuse.
+ *    Footgun: a commitment is opaque at commit time, so a client that binds it wrong — wrong lobby
+ *    id, wrong entity — cannot be detected until the reveal fails, and by then the wager is already
+ *    escrowed. That player can never reveal and settles through `claimTimeout`: a refund if the
+ *    other side stayed silent too, a total loss if it revealed. Clients MUST derive the lobby id
+ *    with the same `keccak256(abi.encode(challengerEntity, lobbySalt))` this System uses.
  *
  * 6. TOKEN BOUND ACCOUNTS AND NFT TRANSFERS. An entity is the crystal's ERC-6551 account, whose
  *    controller is whoever owns the ERC-721 at that moment. Staked mana is escrowed the instant a
@@ -123,7 +132,9 @@ contract ArenaSystem is System {
    * to the commitment salt. Reusing it reverts, including for terminal lobbies, which are kept as
    * history rather than deleted.
    * @param wager Mana staked by the challenger, matched by the opponent on join.
-   * @param commitment keccak256(abi.encodePacked(move, salt)), see security note 5.
+   * @param commitment keccak256(abi.encodePacked(lobbyId, challengerEntity, move, salt)). The
+   * lobby id is the value this call is about to derive, `keccak256(abi.encode(challengerEntity,
+   * lobbySalt))`, so it must be computed client-side before calling. See security note 5.
    */
   function createLobby(bytes32 lobbySalt, uint128 wager, bytes32 commitment) public returns (bytes32 lobbyId) {
     if (wager == 0) revert ArenaSystem_ZeroWager();
@@ -157,6 +168,8 @@ contract ArenaSystem is System {
   /**
    * @notice Match an open lobby, escrow an equal wager and record the opponent's hidden move.
    * The reveal clock starts here, not at creation: a lobby may sit open indefinitely.
+   * @param commitment keccak256(abi.encodePacked(lobbyId, opponentEntity, move, salt)), see
+   * security note 5. Both bound values are already known to the caller here.
    */
   function joinLobby(bytes32 lobbyId, bytes32 commitment) public {
     if (commitment == bytes32(0)) revert ArenaSystem_EmptyCommitment();
@@ -206,7 +219,7 @@ contract ArenaSystem is System {
 
     MatchCommitmentData memory entry = MatchCommitment.get(lobbyId, player);
     if (entry.revealed) revert ArenaSystem_AlreadyRevealed(lobbyId, player);
-    if (keccak256(abi.encodePacked(move, salt)) != entry.commitment) {
+    if (_commitmentOf(lobbyId, player, move, salt) != entry.commitment) {
       revert ArenaSystem_CommitmentMismatch(lobbyId, player);
     }
 
@@ -340,6 +353,20 @@ contract ArenaSystem is System {
       (own == Element.Water && other == Element.Fire) ||
       (own == Element.Fire && other == Element.Earth) ||
       (own == Element.Earth && other == Element.Water);
+  }
+
+  /**
+   * @dev The single definition of the commitment preimage. Folding `lobbyId` and `player` into the
+   * hash is what makes a commitment non-transferable between matches and between players; see
+   * security note 5. Every operand is fixed-width, so `encodePacked` carries no ambiguity here.
+   */
+  function _commitmentOf(
+    bytes32 lobbyId,
+    bytes32 player,
+    Element move,
+    bytes32 salt
+  ) internal pure returns (bytes32) {
+    return keccak256(abi.encodePacked(lobbyId, player, move, salt));
   }
 
   /// @dev Widened to uint256 so the deadline cannot wrap when uint32 seconds overflow in 2106.
