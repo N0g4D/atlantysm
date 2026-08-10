@@ -102,5 +102,72 @@ export default defineWorld({
       },
       key: ["lobbyId", "playerEntity"],
     },
+
+    /**
+     * Provisional ownership ledger, keyed by the crystal's entity (its ERC-6551 account).
+     *
+     * This is a STOPGAP and is deliberately not the long-term source of truth. Once the ERC-721
+     * facade exists, `ownerOf(tokenId)` becomes authoritative and this table must either be
+     * retired or demoted to a mirror kept in sync by the facade. Two writers for one fact is a
+     * divergence bug waiting to happen, so it must never be left as-is after the facade lands.
+     *
+     * Note the asymmetry that makes this safe in the meantime: the OWNER is an EOA (or any
+     * contract) and may change hands freely, while the ENTITY is the token bound account and is
+     * immutable for the life of the crystal. Everything the game keys on — CrystalData,
+     * ManaBalance, ArenaLobby — hangs off the entity, so a transfer of ownership moves no game
+     * state at all.
+     *
+     * Static width: 20 bytes, one slot.
+     */
+    CrystalOwner: {
+      schema: {
+        id: "bytes32",
+        owner: "address",
+      },
+      key: ["id"],
+    },
+
+    /**
+     * The ERC-6551 inputs needed to derive a crystal's token bound account, and through it the
+     * crystal's entity. Singleton.
+     *
+     * This table exists because the entity key is PERMANENT: CrystalData, ManaBalance and
+     * ArenaLobby all hang off it. Deriving it from placeholder values now would mean every crystal
+     * minted before the real ERC-721 exists sits at an address that will never be its account —
+     * unrecoverable without a migration. So minting is hard-gated on this being set, and the
+     * addresses are configuration rather than constants.
+     *
+     * `accountSalt` is the ERC-6551 salt, not a randomness source; it is fixed per deployment so
+     * that account derivation stays reproducible.
+     *
+     * Static width: 20 + 20 + 20 + 32 = 92 bytes, three slots.
+     */
+    ForgeConfig: {
+      schema: {
+        accountRegistry: "address",
+        accountImplementation: "address",
+        tokenContract: "address",
+        accountSalt: "bytes32",
+      },
+      key: [],
+    },
+
+    /**
+     * Monotonic counter used ONLY as an entropy input to token id derivation, never as the id
+     * itself. Singleton.
+     *
+     * It exists to fix a concrete collision, not a theoretical one: without it, two mints in the
+     * same block from the same sender to the same recipient share every other preimage input
+     * (timestamp, sender, recipient) and would derive an identical token id. See the token id
+     * discussion in CrystalForgeSystem.
+     *
+     * Static width: 32 bytes, one slot.
+     */
+    ForgeNonce: {
+      schema: {
+        value: "uint256",
+      },
+      key: [],
+    },
   },
 });

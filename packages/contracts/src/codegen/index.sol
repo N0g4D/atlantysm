@@ -7,3 +7,6 @@ import { CrystalData, CrystalDataData } from "./tables/CrystalData.sol";
 import { ManaBalance } from "./tables/ManaBalance.sol";
 import { ArenaLobby, ArenaLobbyData } from "./tables/ArenaLobby.sol";
 import { MatchCommitment, MatchCommitmentData } from "./tables/MatchCommitment.sol";
+import { CrystalOwner } from "./tables/CrystalOwner.sol";
+import { ForgeConfig, ForgeConfigData } from "./tables/ForgeConfig.sol";
+import { ForgeNonce } from "./tables/ForgeNonce.sol";
