@@ -9,6 +9,16 @@ export default defineWorld({
      * would be indistinguishable from an open one.
      */
     LobbyStatus: ["None", "Open", "Matched", "Resolved", "Cancelled"],
+
+    /**
+     * Elemental move, chosen under commit-reveal. `None` at index 0 is again a sentinel:
+     * an unrevealed commitment record reads back as zero, so without it a player who never
+     * revealed would look like they had played a real move.
+     *
+     * The triangle is a strict cycle — Water > Fire > Earth > Water — so every element
+     * beats exactly one and loses to exactly one. No element is dominant.
+     */
+    Element: ["None", "Fire", "Water", "Earth"],
   },
   tables: {
     /**
@@ -43,18 +53,54 @@ export default defineWorld({
     /**
      * Pending and resolved arena matches. ArenaSystem is stateless, so all match
      * state lives here. `wager` matches ManaBalance.amount width so staking mana
-     * can never truncate. Static width: 32 + 32 + 16 + 4 + 1 = 85 bytes.
+     * can never truncate.
+     *
+     * `winner` is bytes32(0) until settlement, and stays bytes32(0) on a draw — read it
+     * together with `status`, never on its own.
+     *
+     * `matchedAt` is when the lobby left `Open`, and it is what the reveal deadline is
+     * measured from. It cannot be folded into `createdAt`: a lobby may sit open for days
+     * before someone joins, so a deadline derived from creation time could already be
+     * expired the instant the match starts. Both are uint32 seconds and overflow in 2106.
+     *
+     * Static width: 32 + 32 + 32 + 16 + 4 + 4 + 1 = 121 bytes, four slots. Note that the
+     * previous 85-byte version already cost three slots and `winner` alone pushes it to
+     * four, so `matchedAt` is free in storage terms.
      */
     ArenaLobby: {
       schema: {
         id: "bytes32",
         challenger: "bytes32",
         opponent: "bytes32",
+        winner: "bytes32",
         wager: "uint128",
         createdAt: "uint32",
+        matchedAt: "uint32",
         status: "LobbyStatus",
       },
       key: ["id"],
+    },
+
+    /**
+     * Commit-reveal state, one record per player per match. Keyed by both so the two
+     * sides of a match never collide and each can be read independently.
+     *
+     * `commitment` is keccak256(abi.encodePacked(move, salt)) and is written when the
+     * player enters the match; `move` stays `None` until that player reveals.
+     * `revealed` is the authoritative flag — do not infer it from `move != None`, since
+     * a future move enum could legitimately include a zero-valued entry.
+     *
+     * Static width: 32 + 1 + 1 = 34 bytes, two slots.
+     */
+    MatchCommitment: {
+      schema: {
+        lobbyId: "bytes32",
+        playerEntity: "bytes32",
+        commitment: "bytes32",
+        move: "Element",
+        revealed: "bool",
+      },
+      key: ["lobbyId", "playerEntity"],
     },
   },
 });

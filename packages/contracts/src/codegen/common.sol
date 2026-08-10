@@ -10,3 +10,10 @@ enum LobbyStatus {
   Resolved,
   Cancelled
 }
+
+enum Element {
+  None,
+  Fire,
+  Water,
+  Earth
+}

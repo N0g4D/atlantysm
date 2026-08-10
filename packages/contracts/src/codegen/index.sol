@@ -6,3 +6,4 @@ pragma solidity >=0.8.24;
 import { CrystalData, CrystalDataData } from "./tables/CrystalData.sol";
 import { ManaBalance } from "./tables/ManaBalance.sol";
 import { ArenaLobby, ArenaLobbyData } from "./tables/ArenaLobby.sol";
+import { MatchCommitment, MatchCommitmentData } from "./tables/MatchCommitment.sol";

@@ -22,8 +22,10 @@ import { LobbyStatus } from "../common.sol";
 struct ArenaLobbyData {
   bytes32 challenger;
   bytes32 opponent;
+  bytes32 winner;
   uint128 wager;
   uint32 createdAt;
+  uint32 matchedAt;
   LobbyStatus status;
 }
 
@@ -32,12 +34,12 @@ library ArenaLobby {
   ResourceId constant _tableId = ResourceId.wrap(0x746261707000000000000000000000004172656e614c6f626279000000000000);
 
   FieldLayout constant _fieldLayout =
-    FieldLayout.wrap(0x0055050020201004010000000000000000000000000000000000000000000000);
+    FieldLayout.wrap(0x0079070020202010040401000000000000000000000000000000000000000000);
 
   // Hex-encoded key schema of (bytes32)
   Schema constant _keySchema = Schema.wrap(0x002001005f000000000000000000000000000000000000000000000000000000);
-  // Hex-encoded value schema of (bytes32, bytes32, uint128, uint32, uint8)
-  Schema constant _valueSchema = Schema.wrap(0x005505005f5f0f03000000000000000000000000000000000000000000000000);
+  // Hex-encoded value schema of (bytes32, bytes32, bytes32, uint128, uint32, uint32, uint8)
+  Schema constant _valueSchema = Schema.wrap(0x007907005f5f5f0f030300000000000000000000000000000000000000000000);
 
   /**
    * @notice Get the table's key field names.
@@ -53,12 +55,14 @@ library ArenaLobby {
    * @return fieldNames An array of strings with the names of value fields.
    */
   function getFieldNames() internal pure returns (string[] memory fieldNames) {
-    fieldNames = new string[](5);
+    fieldNames = new string[](7);
     fieldNames[0] = "challenger";
     fieldNames[1] = "opponent";
-    fieldNames[2] = "wager";
-    fieldNames[3] = "createdAt";
-    fieldNames[4] = "status";
+    fieldNames[2] = "winner";
+    fieldNames[3] = "wager";
+    fieldNames[4] = "createdAt";
+    fieldNames[5] = "matchedAt";
+    fieldNames[6] = "status";
   }
 
   /**
@@ -160,13 +164,55 @@ library ArenaLobby {
   }
 
   /**
+   * @notice Get winner.
+   */
+  function getWinner(bytes32 id) internal view returns (bytes32 winner) {
+    bytes32[] memory _keyTuple = new bytes32[](1);
+    _keyTuple[0] = id;
+
+    bytes32 _blob = StoreSwitch.getStaticField(_tableId, _keyTuple, 2, _fieldLayout);
+    return (bytes32(_blob));
+  }
+
+  /**
+   * @notice Get winner.
+   */
+  function _getWinner(bytes32 id) internal view returns (bytes32 winner) {
+    bytes32[] memory _keyTuple = new bytes32[](1);
+    _keyTuple[0] = id;
+
+    bytes32 _blob = StoreCore.getStaticField(_tableId, _keyTuple, 2, _fieldLayout);
+    return (bytes32(_blob));
+  }
+
+  /**
+   * @notice Set winner.
+   */
+  function setWinner(bytes32 id, bytes32 winner) internal {
+    bytes32[] memory _keyTuple = new bytes32[](1);
+    _keyTuple[0] = id;
+
+    StoreSwitch.setStaticField(_tableId, _keyTuple, 2, abi.encodePacked((winner)), _fieldLayout);
+  }
+
+  /**
+   * @notice Set winner.
+   */
+  function _setWinner(bytes32 id, bytes32 winner) internal {
+    bytes32[] memory _keyTuple = new bytes32[](1);
+    _keyTuple[0] = id;
+
+    StoreCore.setStaticField(_tableId, _keyTuple, 2, abi.encodePacked((winner)), _fieldLayout);
+  }
+
+  /**
    * @notice Get wager.
    */
   function getWager(bytes32 id) internal view returns (uint128 wager) {
     bytes32[] memory _keyTuple = new bytes32[](1);
     _keyTuple[0] = id;
 
-    bytes32 _blob = StoreSwitch.getStaticField(_tableId, _keyTuple, 2, _fieldLayout);
+    bytes32 _blob = StoreSwitch.getStaticField(_tableId, _keyTuple, 3, _fieldLayout);
     return (uint128(bytes16(_blob)));
   }
 
@@ -177,7 +223,7 @@ library ArenaLobby {
     bytes32[] memory _keyTuple = new bytes32[](1);
     _keyTuple[0] = id;
 
-    bytes32 _blob = StoreCore.getStaticField(_tableId, _keyTuple, 2, _fieldLayout);
+    bytes32 _blob = StoreCore.getStaticField(_tableId, _keyTuple, 3, _fieldLayout);
     return (uint128(bytes16(_blob)));
   }
 
@@ -188,7 +234,7 @@ library ArenaLobby {
     bytes32[] memory _keyTuple = new bytes32[](1);
     _keyTuple[0] = id;
 
-    StoreSwitch.setStaticField(_tableId, _keyTuple, 2, abi.encodePacked((wager)), _fieldLayout);
+    StoreSwitch.setStaticField(_tableId, _keyTuple, 3, abi.encodePacked((wager)), _fieldLayout);
   }
 
   /**
@@ -198,7 +244,7 @@ library ArenaLobby {
     bytes32[] memory _keyTuple = new bytes32[](1);
     _keyTuple[0] = id;
 
-    StoreCore.setStaticField(_tableId, _keyTuple, 2, abi.encodePacked((wager)), _fieldLayout);
+    StoreCore.setStaticField(_tableId, _keyTuple, 3, abi.encodePacked((wager)), _fieldLayout);
   }
 
   /**
@@ -208,7 +254,7 @@ library ArenaLobby {
     bytes32[] memory _keyTuple = new bytes32[](1);
     _keyTuple[0] = id;
 
-    bytes32 _blob = StoreSwitch.getStaticField(_tableId, _keyTuple, 3, _fieldLayout);
+    bytes32 _blob = StoreSwitch.getStaticField(_tableId, _keyTuple, 4, _fieldLayout);
     return (uint32(bytes4(_blob)));
   }
 
@@ -219,7 +265,7 @@ library ArenaLobby {
     bytes32[] memory _keyTuple = new bytes32[](1);
     _keyTuple[0] = id;
 
-    bytes32 _blob = StoreCore.getStaticField(_tableId, _keyTuple, 3, _fieldLayout);
+    bytes32 _blob = StoreCore.getStaticField(_tableId, _keyTuple, 4, _fieldLayout);
     return (uint32(bytes4(_blob)));
   }
 
@@ -230,7 +276,7 @@ library ArenaLobby {
     bytes32[] memory _keyTuple = new bytes32[](1);
     _keyTuple[0] = id;
 
-    StoreSwitch.setStaticField(_tableId, _keyTuple, 3, abi.encodePacked((createdAt)), _fieldLayout);
+    StoreSwitch.setStaticField(_tableId, _keyTuple, 4, abi.encodePacked((createdAt)), _fieldLayout);
   }
 
   /**
@@ -240,7 +286,49 @@ library ArenaLobby {
     bytes32[] memory _keyTuple = new bytes32[](1);
     _keyTuple[0] = id;
 
-    StoreCore.setStaticField(_tableId, _keyTuple, 3, abi.encodePacked((createdAt)), _fieldLayout);
+    StoreCore.setStaticField(_tableId, _keyTuple, 4, abi.encodePacked((createdAt)), _fieldLayout);
+  }
+
+  /**
+   * @notice Get matchedAt.
+   */
+  function getMatchedAt(bytes32 id) internal view returns (uint32 matchedAt) {
+    bytes32[] memory _keyTuple = new bytes32[](1);
+    _keyTuple[0] = id;
+
+    bytes32 _blob = StoreSwitch.getStaticField(_tableId, _keyTuple, 5, _fieldLayout);
+    return (uint32(bytes4(_blob)));
+  }
+
+  /**
+   * @notice Get matchedAt.
+   */
+  function _getMatchedAt(bytes32 id) internal view returns (uint32 matchedAt) {
+    bytes32[] memory _keyTuple = new bytes32[](1);
+    _keyTuple[0] = id;
+
+    bytes32 _blob = StoreCore.getStaticField(_tableId, _keyTuple, 5, _fieldLayout);
+    return (uint32(bytes4(_blob)));
+  }
+
+  /**
+   * @notice Set matchedAt.
+   */
+  function setMatchedAt(bytes32 id, uint32 matchedAt) internal {
+    bytes32[] memory _keyTuple = new bytes32[](1);
+    _keyTuple[0] = id;
+
+    StoreSwitch.setStaticField(_tableId, _keyTuple, 5, abi.encodePacked((matchedAt)), _fieldLayout);
+  }
+
+  /**
+   * @notice Set matchedAt.
+   */
+  function _setMatchedAt(bytes32 id, uint32 matchedAt) internal {
+    bytes32[] memory _keyTuple = new bytes32[](1);
+    _keyTuple[0] = id;
+
+    StoreCore.setStaticField(_tableId, _keyTuple, 5, abi.encodePacked((matchedAt)), _fieldLayout);
   }
 
   /**
@@ -250,7 +338,7 @@ library ArenaLobby {
     bytes32[] memory _keyTuple = new bytes32[](1);
     _keyTuple[0] = id;
 
-    bytes32 _blob = StoreSwitch.getStaticField(_tableId, _keyTuple, 4, _fieldLayout);
+    bytes32 _blob = StoreSwitch.getStaticField(_tableId, _keyTuple, 6, _fieldLayout);
     return LobbyStatus(uint8(bytes1(_blob)));
   }
 
@@ -261,7 +349,7 @@ library ArenaLobby {
     bytes32[] memory _keyTuple = new bytes32[](1);
     _keyTuple[0] = id;
 
-    bytes32 _blob = StoreCore.getStaticField(_tableId, _keyTuple, 4, _fieldLayout);
+    bytes32 _blob = StoreCore.getStaticField(_tableId, _keyTuple, 6, _fieldLayout);
     return LobbyStatus(uint8(bytes1(_blob)));
   }
 
@@ -272,7 +360,7 @@ library ArenaLobby {
     bytes32[] memory _keyTuple = new bytes32[](1);
     _keyTuple[0] = id;
 
-    StoreSwitch.setStaticField(_tableId, _keyTuple, 4, abi.encodePacked(uint8(status)), _fieldLayout);
+    StoreSwitch.setStaticField(_tableId, _keyTuple, 6, abi.encodePacked(uint8(status)), _fieldLayout);
   }
 
   /**
@@ -282,7 +370,7 @@ library ArenaLobby {
     bytes32[] memory _keyTuple = new bytes32[](1);
     _keyTuple[0] = id;
 
-    StoreCore.setStaticField(_tableId, _keyTuple, 4, abi.encodePacked(uint8(status)), _fieldLayout);
+    StoreCore.setStaticField(_tableId, _keyTuple, 6, abi.encodePacked(uint8(status)), _fieldLayout);
   }
 
   /**
@@ -322,11 +410,13 @@ library ArenaLobby {
     bytes32 id,
     bytes32 challenger,
     bytes32 opponent,
+    bytes32 winner,
     uint128 wager,
     uint32 createdAt,
+    uint32 matchedAt,
     LobbyStatus status
   ) internal {
-    bytes memory _staticData = encodeStatic(challenger, opponent, wager, createdAt, status);
+    bytes memory _staticData = encodeStatic(challenger, opponent, winner, wager, createdAt, matchedAt, status);
 
     EncodedLengths _encodedLengths;
     bytes memory _dynamicData;
@@ -344,11 +434,13 @@ library ArenaLobby {
     bytes32 id,
     bytes32 challenger,
     bytes32 opponent,
+    bytes32 winner,
     uint128 wager,
     uint32 createdAt,
+    uint32 matchedAt,
     LobbyStatus status
   ) internal {
-    bytes memory _staticData = encodeStatic(challenger, opponent, wager, createdAt, status);
+    bytes memory _staticData = encodeStatic(challenger, opponent, winner, wager, createdAt, matchedAt, status);
 
     EncodedLengths _encodedLengths;
     bytes memory _dynamicData;
@@ -366,8 +458,10 @@ library ArenaLobby {
     bytes memory _staticData = encodeStatic(
       _table.challenger,
       _table.opponent,
+      _table.winner,
       _table.wager,
       _table.createdAt,
+      _table.matchedAt,
       _table.status
     );
 
@@ -387,8 +481,10 @@ library ArenaLobby {
     bytes memory _staticData = encodeStatic(
       _table.challenger,
       _table.opponent,
+      _table.winner,
       _table.wager,
       _table.createdAt,
+      _table.matchedAt,
       _table.status
     );
 
@@ -406,16 +502,32 @@ library ArenaLobby {
    */
   function decodeStatic(
     bytes memory _blob
-  ) internal pure returns (bytes32 challenger, bytes32 opponent, uint128 wager, uint32 createdAt, LobbyStatus status) {
+  )
+    internal
+    pure
+    returns (
+      bytes32 challenger,
+      bytes32 opponent,
+      bytes32 winner,
+      uint128 wager,
+      uint32 createdAt,
+      uint32 matchedAt,
+      LobbyStatus status
+    )
+  {
     challenger = (Bytes.getBytes32(_blob, 0));
 
     opponent = (Bytes.getBytes32(_blob, 32));
 
-    wager = (uint128(Bytes.getBytes16(_blob, 64)));
+    winner = (Bytes.getBytes32(_blob, 64));
 
-    createdAt = (uint32(Bytes.getBytes4(_blob, 80)));
+    wager = (uint128(Bytes.getBytes16(_blob, 96)));
 
-    status = LobbyStatus(uint8(Bytes.getBytes1(_blob, 84)));
+    createdAt = (uint32(Bytes.getBytes4(_blob, 112)));
+
+    matchedAt = (uint32(Bytes.getBytes4(_blob, 116)));
+
+    status = LobbyStatus(uint8(Bytes.getBytes1(_blob, 120)));
   }
 
   /**
@@ -429,7 +541,15 @@ library ArenaLobby {
     EncodedLengths,
     bytes memory
   ) internal pure returns (ArenaLobbyData memory _table) {
-    (_table.challenger, _table.opponent, _table.wager, _table.createdAt, _table.status) = decodeStatic(_staticData);
+    (
+      _table.challenger,
+      _table.opponent,
+      _table.winner,
+      _table.wager,
+      _table.createdAt,
+      _table.matchedAt,
+      _table.status
+    ) = decodeStatic(_staticData);
   }
 
   /**
@@ -459,11 +579,13 @@ library ArenaLobby {
   function encodeStatic(
     bytes32 challenger,
     bytes32 opponent,
+    bytes32 winner,
     uint128 wager,
     uint32 createdAt,
+    uint32 matchedAt,
     LobbyStatus status
   ) internal pure returns (bytes memory) {
-    return abi.encodePacked(challenger, opponent, wager, createdAt, status);
+    return abi.encodePacked(challenger, opponent, winner, wager, createdAt, matchedAt, status);
   }
 
   /**
@@ -475,11 +597,13 @@ library ArenaLobby {
   function encode(
     bytes32 challenger,
     bytes32 opponent,
+    bytes32 winner,
     uint128 wager,
     uint32 createdAt,
+    uint32 matchedAt,
     LobbyStatus status
   ) internal pure returns (bytes memory, EncodedLengths, bytes memory) {
-    bytes memory _staticData = encodeStatic(challenger, opponent, wager, createdAt, status);
+    bytes memory _staticData = encodeStatic(challenger, opponent, winner, wager, createdAt, matchedAt, status);
 
     EncodedLengths _encodedLengths;
     bytes memory _dynamicData;
