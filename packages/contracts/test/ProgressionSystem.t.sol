@@ -12,15 +12,12 @@ import { IProgressionSystem } from "../src/codegen/world/IProgressionSystem.sol"
 // signature change then breaks compilation instead of asserting a stale shape.
 import { ProgressionSystem } from "../src/systems/ProgressionSystem.sol";
 import { CrystalNFT } from "../src/tokens/CrystalNFT.sol";
+import { DevERC6551Registry } from "../src/dev/DevERC6551Registry.sol";
+import { AtlantysmAccount } from "../src/accounts/AtlantysmAccount.sol";
 import { ManaToken } from "../src/tokens/ManaToken.sol";
 import { CrystalData, ManaBalance, ManaSupply, StarterManaClaimed } from "../src/codegen/index.sol";
 import { Element } from "../src/codegen/common.sol";
 
-/// @dev Minimal ERC-6551 registry stand-in. Progression never deploys accounts — it only needs the
-/// addresses to be real TBAs — so this exists purely to satisfy `configureForge`.
-contract StubRegistry {}
-
-contract StubAccountImplementation {}
 
 /**
  * @dev Re-enters `levelUp` from inside the mana write, to test security note 2 rather than trust it.
@@ -98,8 +95,8 @@ contract ProgressionSystemTest is MudTest {
     super.setUp();
 
     deployer = vm.addr(vm.envUint("PRIVATE_KEY"));
-    registry = address(new StubRegistry());
-    accountImplementation = address(new StubAccountImplementation());
+    registry = address(new DevERC6551Registry());
+    accountImplementation = address(new AtlantysmAccount());
 
     nft = new CrystalNFT(IWorld(worldAddress));
     manaToken = new ManaToken(IWorld(worldAddress));

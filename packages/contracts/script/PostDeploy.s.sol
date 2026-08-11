@@ -7,7 +7,8 @@ import { console } from "forge-std/console.sol";
 import { IWorld } from "../src/codegen/world/IWorld.sol";
 import { CrystalNFT } from "../src/tokens/CrystalNFT.sol";
 import { ManaToken } from "../src/tokens/ManaToken.sol";
-import { DevERC6551Registry, DevERC6551AccountImpl } from "../src/dev/DevERC6551Registry.sol";
+import { DevERC6551Registry } from "../src/dev/DevERC6551Registry.sol";
+import { AtlantysmAccount } from "../src/accounts/AtlantysmAccount.sol";
 
 /**
  * @title PostDeploy
@@ -134,6 +135,10 @@ contract PostDeploy is Script {
     }
 
     if (registry == address(0)) registry = address(new DevERC6551Registry());
-    if (implementation == address(0)) implementation = address(new DevERC6551AccountImpl());
+    // A REAL implementation since phase 9, not a placeholder: this is what lets a crystal act for
+    // its owner. Deploying it here rather than only on dev chains would be wrong for the registry —
+    // that one must be the canonical deployment — but the account implementation is ours to choose,
+    // so the same contract is used everywhere and only the address differs.
+    if (implementation == address(0)) implementation = address(new AtlantysmAccount());
   }
 }

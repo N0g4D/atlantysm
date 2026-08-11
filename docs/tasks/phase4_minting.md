@@ -99,10 +99,9 @@ the id, which keeps uniqueness by construction while removing trivial enumerabil
 3. ~~**A fresh crystal has no mana.**~~ **Closed in phase 5.** `ProgressionSystem.claimStarterMana`
    grants 100 ether once per crystal, so a forged crystal can now fund itself into the arena with no
    admin involvement.
-4. **Nothing deploys the token bound account.** The entity is usable as an identity from the address
-   alone, but for a crystal to actually *call* the World, its account must exist on-chain. Whoever
-   owns the ERC-721 will need to invoke the registry's `createAccount` — a step the game currently
-   never performs.
+4. ~~**Nothing deploys the token bound account.**~~ **Closed in phase 9.** `CrystalNFT.mint` now calls
+   `registry.createAccount` in the same transaction, and `AtlantysmAccount` gives the crystal a way
+   to call the World for its owner. See `phase9_accounts.md`.
 5. ~~**Levels never change.**~~ **Closed in phase 5.** `ProgressionSystem.levelUp` raises the level
    for a progressive mana cost (`50 ether × current level`), so `ADVANTAGE_MULTIPLIER` and raw level
    differences are both reachable in real matches.

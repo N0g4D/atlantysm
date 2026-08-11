@@ -40,7 +40,7 @@ So:
 
 | Chain | Behaviour |
 | --- | --- |
-| anvil (31337) | deploys `DevERC6551Registry` + `DevERC6551AccountImpl` and uses them |
+| anvil (31337) | deploys `DevERC6551Registry` + `AtlantysmAccount` and uses them (phase 9 replaced the placeholder implementation with the real one) |
 | anything else | **reverts** unless `ERC6551_REGISTRY` and `ERC6551_ACCOUNT_IMPLEMENTATION` are set |
 
 Failing the deploy is the cheap outcome; discovering the mistake after the first mint is the
@@ -101,14 +101,11 @@ nothing at all.
 
 ## 6. Open points
 
-1. **Token bound accounts still cannot act.** `DevERC6551AccountImpl` is a placeholder: it exists so
-   the implementation address has code behind it, and account addresses derive correctly either way,
-   but an account deployed against it cannot call the World. A player therefore still cannot drive
-   their own crystal without `vm.prank`. This is phase 4 open point 2 and remains the single biggest
-   gap between "the tests pass" and "a human can play". It is the natural next phase.
-2. **Nothing deploys the accounts either.** Even with a functional implementation, some step has to
-   call `registry.createAccount` for a freshly minted crystal. The natural home is `CrystalNFT.mint`,
-   which would make forging and account creation atomic.
+1. ~~**Token bound accounts still cannot act.**~~ **Closed in phase 9.** The placeholder was replaced
+   by `AtlantysmAccount`, a real ERC-6551 implementation that forwards owner-authorised calls to the
+   World. `test/Integration.t.sol` plays the game without pranking a single account.
+2. ~~**Nothing deploys the accounts either.**~~ **Closed in phase 9**, in exactly the place predicted:
+   `CrystalNFT.mint` calls `registry.createAccount`, so forging and account creation are atomic.
 3. **The mint price is a bare default.** `0.01 ether` on a dev chain is arbitrary and unconnected to
    `STARTER_MANA`, which phase 6 already flagged: those two numbers together set the mana issuance
    rate and are still not in a deliberate relationship.

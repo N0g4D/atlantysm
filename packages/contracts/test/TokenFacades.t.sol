@@ -14,12 +14,11 @@ import { ITokenBridgeSystem } from "../src/codegen/world/ITokenBridgeSystem.sol"
 import { IProgressionSystem } from "../src/codegen/world/IProgressionSystem.sol";
 import { IArenaSystem } from "../src/codegen/world/IArenaSystem.sol";
 import { CrystalNFT } from "../src/tokens/CrystalNFT.sol";
+import { DevERC6551Registry } from "../src/dev/DevERC6551Registry.sol";
+import { AtlantysmAccount } from "../src/accounts/AtlantysmAccount.sol";
 import { ManaToken } from "../src/tokens/ManaToken.sol";
 import { CrystalData, CrystalOwner, CrystalBalance, ManaBalance, ManaSupply } from "../src/codegen/index.sol";
 
-contract StubRegistry {}
-
-contract StubAccountImplementation {}
 
 /**
  * @dev Exercises the two facades against the World they project.
@@ -55,8 +54,8 @@ contract TokenFacadesTest is MudTest {
 
     vm.startPrank(deployer);
     IWorld(worldAddress).app__configureForge(
-      address(new StubRegistry()),
-      address(new StubAccountImplementation()),
+      address(new DevERC6551Registry()),
+      address(new AtlantysmAccount()),
       TOKEN_CONTRACT,
       ACCOUNT_SALT
     );

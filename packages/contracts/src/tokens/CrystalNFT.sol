@@ -5,6 +5,7 @@ import { ERC721 } from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import { ERC721Utils } from "@openzeppelin/contracts/token/ERC721/utils/ERC721Utils.sol";
 
 import { IWorld } from "../codegen/world/IWorld.sol";
+import { IERC6551Registry } from "../accounts/IERC6551.sol";
 
 /**
  * @title CrystalNFT
@@ -52,6 +53,25 @@ contract CrystalNFT is ERC721 {
   /// @notice The MUD World that owns all crystal state.
   IWorld public immutable world;
 
+  /**
+   * @notice ERC-6551 inputs, cached on the first mint.
+   *
+   * These cannot be immutables: `configureForge` needs this contract's address as its
+   * `tokenContract`, so the config necessarily comes into existence AFTER this constructor runs.
+   *
+   * Caching is safe for a specific reason rather than by luck — `configureForge` freezes the moment
+   * the first crystal is minted, so the values read during that very mint are the final ones. After
+   * that the World could not change them even if asked. The alternative, reading
+   * `world.forgeConfig()` on every mint, pays a World hop plus three table slots forever to fetch
+   * a value that provably cannot move.
+   */
+  address public accountRegistry;
+  address public accountImplementation;
+  bytes32 public accountSalt;
+
+  /// @notice Emitted when a crystal's token bound account is deployed on-chain.
+  event CrystalAccountDeployed(uint256 indexed tokenId, address indexed account);
+
   error CrystalNFT_BurnNotSupported();
 
   constructor(IWorld _world) ERC721("Atlantysm Crystal", "CRYSTAL") {
@@ -70,10 +90,46 @@ contract CrystalNFT is ERC721 {
 
     emit Transfer(address(0), to, tokenId);
 
+    // Phase 9: give the crystal a body. Until the account exists on-chain, its address is only a
+    // prediction and nothing can call as it — the identity model would be unreachable by a human.
+    _deployAccount(tokenId);
+
     // The receiver hook `_safeMint` would have run. Skipping it would let a mint land in a contract
     // that cannot move it again. It runs last, after MUD state has settled, so a re-entrant mint is
     // just another ordinary mint.
     ERC721Utils.checkOnERC721Received(_msgSender(), address(0), to, tokenId, "");
+  }
+
+  /**
+   * @dev Deploys the crystal's ERC-6551 account. `createAccount` is idempotent per the spec, so
+   * this stays correct even if the account somehow already exists.
+   *
+   * The address it returns is the same one `CrystalIdentityLib` predicted when MUD wrote
+   * `CrystalData`, because both hash the same creation code with the same salt. A mismatch here
+   * would mean the crystal's state lives at an address its account will never occupy — which is why
+   * `testTheAccountLandsExactlyWhereMudPredicted` asserts the two agree rather than trusting it.
+   */
+  function _deployAccount(uint256 tokenId) internal returns (address account) {
+    (address registry, address implementation, bytes32 salt) = _identityInputs();
+
+    account = IERC6551Registry(registry).createAccount(implementation, salt, block.chainid, address(this), tokenId);
+
+    emit CrystalAccountDeployed(tokenId, account);
+  }
+
+  /// @dev Cache-through read of the frozen ERC-6551 config. See the fields' documentation for why
+  /// caching is sound.
+  function _identityInputs() internal returns (address registry, address implementation, bytes32 salt) {
+    registry = accountRegistry;
+    if (registry != address(0)) {
+      return (registry, accountImplementation, accountSalt);
+    }
+
+    (registry, implementation, , salt) = world.app__forgeConfig();
+
+    accountRegistry = registry;
+    accountImplementation = implementation;
+    accountSalt = salt;
   }
 
   // -----------------------------------------------------------------------------------------

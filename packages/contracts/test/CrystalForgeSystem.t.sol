@@ -13,6 +13,7 @@ import { ICrystalForgeSystem } from "../src/codegen/world/ICrystalForgeSystem.so
 // signature change then breaks compilation instead of asserting a stale shape.
 import { CrystalForgeSystem } from "../src/systems/CrystalForgeSystem.sol";
 import { CrystalNFT } from "../src/tokens/CrystalNFT.sol";
+import { AtlantysmAccount } from "../src/accounts/AtlantysmAccount.sol";
 import { ManaToken } from "../src/tokens/ManaToken.sol";
 import { CrystalData, CrystalOwner, ForgeConfig, ManaBalance, MintPrice } from "../src/codegen/index.sol";
 import { Element } from "../src/codegen/common.sol";
@@ -42,6 +43,13 @@ contract ReferenceERC6551Registry {
       hex"5af43d82803e903d91602b57fd5bf3",
       abi.encode(salt, chainId, tokenContract, tokenId)
     );
+
+    // Idempotent, as the spec requires. Since phase 9 the mint already deploys the account, so a
+    // registry that insisted on deploying twice would revert here and mask what is being tested.
+    address predicted = address(
+      uint160(uint256(keccak256(abi.encodePacked(bytes1(0xff), address(this), salt, keccak256(code)))))
+    );
+    if (predicted.code.length != 0) return predicted;
 
     assembly {
       deployed := create2(0, add(code, 0x20), mload(code), salt)
@@ -81,7 +89,7 @@ contract CrystalForgeSystemTest is MudTest {
 
     deployer = vm.addr(vm.envUint("PRIVATE_KEY"));
     registry = new ReferenceERC6551Registry();
-    accountImplementation = address(new MockAccount());
+    accountImplementation = address(new AtlantysmAccount());
 
     nft = new CrystalNFT(IWorld(worldAddress));
     manaToken = new ManaToken(IWorld(worldAddress));
