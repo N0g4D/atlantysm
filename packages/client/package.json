@@ -13,17 +13,25 @@
   "dependencies": {
     "@latticexyz/common": "2.2.23",
     "@latticexyz/dev-tools": "2.2.23",
+    "@latticexyz/react": "2.2.23",
     "@latticexyz/recs": "2.2.23",
     "@latticexyz/schema-type": "2.2.23",
     "@latticexyz/store-sync": "2.2.23",
     "@latticexyz/utils": "2.2.23",
     "@latticexyz/world": "2.2.23",
     "contracts": "workspace:*",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
     "rxjs": "7.5.5",
     "viem": "2.35.1"
   },
   "devDependencies": {
+    "@types/react": "^18",
     "@types/react-dom": "18.2.7",
+    "@vitejs/plugin-react": "^4",
+    "autoprefixer": "^10",
+    "postcss": "^8",
+    "tailwindcss": "^3.4",
     "vite": "^4.2.1",
     "wait-port": "^1.0.4"
   }

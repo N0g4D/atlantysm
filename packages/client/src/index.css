@@ -1,0 +1,55 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-offwhite bg-grid-pattern bg-grid-32 text-ink antialiased;
+    min-height: 100vh;
+  }
+}
+
+/**
+ * A small, flat vocabulary rather than a component library. Everything here is one rule deep and
+ * composes with ordinary utilities — the moment a class needs a variant, it belongs inline.
+ */
+@layer components {
+  /** The one surface. Solid fill so the page grid stops at its edge, which is what reads as paper. */
+  .panel {
+    @apply border-2 border-ink bg-white shadow-line;
+  }
+
+  .panel-flat {
+    @apply border-2 border-ink bg-white;
+  }
+
+  /** Navigation. Inactive tabs are outline-only; the active one fills with a pastel. */
+  .tab {
+    @apply border-2 border-ink bg-white px-4 py-2 text-sm font-medium transition-none;
+  }
+
+  .tab-active {
+    @apply bg-solarpunk-lavender shadow-line-sm;
+  }
+
+  /** Monospace chip for addresses and ids — anything the user might compare character by character. */
+  .chip {
+    @apply border-2 border-ink px-2.5 py-1 font-mono text-xs;
+  }
+
+  .btn {
+    @apply border-2 border-ink bg-white px-4 py-2 text-sm font-medium shadow-line-sm active:translate-x-[2px] active:translate-y-[2px] active:shadow-none;
+  }
+
+  .btn-primary {
+    @apply bg-solarpunk-mint;
+  }
+
+  .heading {
+    @apply text-lg font-semibold tracking-tight;
+  }
+
+  .muted {
+    @apply text-sm text-ink/60;
+  }
+}
