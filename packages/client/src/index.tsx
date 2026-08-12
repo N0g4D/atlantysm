@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import mudConfig from "contracts/mud.config";
 
 import { App } from "./App";
+import { ToastProvider } from "./components/Toaster";
 import { MudProvider } from "./mud/MudProvider";
 import { setup } from "./mud/setup";
 import "./index.css";
@@ -19,7 +20,9 @@ const mud = await setup();
 createRoot(rootElement).render(
   <StrictMode>
     <MudProvider value={mud}>
-      <App />
+      <ToastProvider>
+        <App />
+      </ToastProvider>
     </MudProvider>
   </StrictMode>,
 );

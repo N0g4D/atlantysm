@@ -38,7 +38,9 @@
   }
 
   .btn {
-    @apply border-2 border-ink bg-white px-4 py-2 text-sm font-medium shadow-line-sm active:translate-x-[2px] active:translate-y-[2px] active:shadow-none;
+    @apply border-2 border-ink bg-white px-4 py-2 text-sm font-medium shadow-line-sm;
+    @apply enabled:active:translate-x-[2px] enabled:active:translate-y-[2px] enabled:active:shadow-none;
+    @apply disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none;
   }
 
   .btn-primary {
