@@ -102,9 +102,77 @@ export function createSystemCalls(
     return callAsCrystal(entity, encodeFunctionData({ abi: IWorldAbi, functionName: "app__levelUp", args: [] }));
   }
 
+  // -----------------------------------------------------------------------------------------
+  // Arena
+  // -----------------------------------------------------------------------------------------
+
+  async function createLobby(entity: Entity, lobbySalt: Hex, wager: bigint, commitment: Hex): Promise<Hex> {
+    return callAsCrystal(
+      entity,
+      encodeFunctionData({ abi: IWorldAbi, functionName: "app__createLobby", args: [lobbySalt, wager, commitment] }),
+    );
+  }
+
+  async function joinLobby(entity: Entity, lobbyId: Hex, commitment: Hex): Promise<Hex> {
+    return callAsCrystal(
+      entity,
+      encodeFunctionData({ abi: IWorldAbi, functionName: "app__joinLobby", args: [lobbyId, commitment] }),
+    );
+  }
+
+  async function revealMove(entity: Entity, lobbyId: Hex, move: number, salt: Hex): Promise<Hex> {
+    return callAsCrystal(
+      entity,
+      encodeFunctionData({ abi: IWorldAbi, functionName: "app__revealMove", args: [lobbyId, move, salt] }),
+    );
+  }
+
+  async function claimTimeout(entity: Entity, lobbyId: Hex): Promise<Hex> {
+    return callAsCrystal(
+      entity,
+      encodeFunctionData({ abi: IWorldAbi, functionName: "app__claimTimeout", args: [lobbyId] }),
+    );
+  }
+
+  async function cancelLobby(entity: Entity, lobbyId: Hex): Promise<Hex> {
+    return callAsCrystal(
+      entity,
+      encodeFunctionData({ abi: IWorldAbi, functionName: "app__cancelLobby", args: [lobbyId] }),
+    );
+  }
+
+  /**
+   * Settle a fully revealed match.
+   *
+   * Sent straight from the wallet, NOT through a crystal's account — and that is not an
+   * inconsistency. `resolveMatch` is permissionless by design (phase 3.5): with both moves already
+   * on-chain the outcome is fixed, so ordering the transaction gains nothing and any keeper may
+   * drive it. Routing it through a token bound account would add a hop and quietly require the
+   * caller to own a crystal.
+   */
+  async function resolveMatch(lobbyId: Hex): Promise<Hex> {
+    const hash = await walletClient.writeContract({
+      chain: walletClient.chain,
+      account,
+      address: worldContract.address,
+      abi: IWorldAbi,
+      functionName: "app__resolveMatch",
+      args: [lobbyId],
+    });
+
+    await waitForTransaction(hash);
+    return hash;
+  }
+
   return {
     mintCrystal,
     claimStarterMana,
     levelUp,
+    createLobby,
+    joinLobby,
+    revealMove,
+    resolveMatch,
+    claimTimeout,
+    cancelLobby,
   };
 }

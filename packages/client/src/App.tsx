@@ -1,7 +1,8 @@
 import { useState } from "react";
 
 import { Navbar } from "./components/Navbar";
-import { ArenaPanel, ForgePanel, SanctuaryPanel } from "./components/panels";
+import { ArenaPanel } from "./components/ArenaPanel";
+import { ForgePanel, SanctuaryPanel } from "./components/panels";
 import { DEFAULT_TAB, type TabId } from "./tabs";
 
 /**

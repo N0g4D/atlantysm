@@ -4,6 +4,7 @@ import mudConfig from "contracts/mud.config";
 
 import { App } from "./App";
 import { ToastProvider } from "./components/Toaster";
+import { CrystalSelectionProvider } from "./mud/CrystalSelection";
 import { MudProvider } from "./mud/MudProvider";
 import { setup } from "./mud/setup";
 import "./index.css";
@@ -20,9 +21,11 @@ const mud = await setup();
 createRoot(rootElement).render(
   <StrictMode>
     <MudProvider value={mud}>
-      <ToastProvider>
-        <App />
-      </ToastProvider>
+      <CrystalSelectionProvider>
+        <ToastProvider>
+          <App />
+        </ToastProvider>
+      </CrystalSelectionProvider>
     </MudProvider>
   </StrictMode>,
 );

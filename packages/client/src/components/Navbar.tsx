@@ -1,5 +1,8 @@
-import { useConnectedAddress, usePrimaryCrystal } from "../hooks/useCrystals";
+import type { Entity } from "@latticexyz/recs";
+
+import { useConnectedAddress } from "../hooks/useCrystals";
 import { truncateAddress, truncateTokenId } from "../lib/format";
+import { useCrystalSelection, useSelectedCrystal } from "../mud/CrystalSelection";
 import { TABS, type TabId } from "../tabs";
 
 type Props = {
@@ -9,7 +12,8 @@ type Props = {
 
 export function Navbar({ active, onSelect }: Props) {
   const address = useConnectedAddress();
-  const crystal = usePrimaryCrystal();
+  const crystal = useSelectedCrystal();
+  const { owned, selected, select } = useCrystalSelection();
 
   return (
     <header className="border-b-2 border-ink bg-white">
@@ -31,6 +35,23 @@ export function Navbar({ active, onSelect }: Props) {
         </nav>
 
         <div className="ml-auto flex items-center gap-2">
+          {/* The Arena needs two crystals to be playable at all, which is what finally made a
+              selector necessary rather than nice to have. */}
+          {owned.length > 1 ? (
+            <select
+              aria-label="Cristallo attivo"
+              className="chip bg-white"
+              value={selected ?? ""}
+              onChange={(event) => select(event.target.value as Entity)}
+            >
+              {owned.map((entity, index) => (
+                <option key={entity} value={entity}>
+                  #{index + 1} · {truncateAddress(entity, 6, 4)}
+                </option>
+              ))}
+            </select>
+          ) : null}
+
           {crystal ? (
             <span className="chip bg-solarpunk-mint" title={`Cristallo #${crystal.tokenId.toString()}`}>
               Cristallo {truncateTokenId(crystal.tokenId)} · Lv {crystal.level}

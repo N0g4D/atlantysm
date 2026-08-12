@@ -2,9 +2,10 @@ import { formatEther } from "viem";
 
 import { Panel, Stat } from "./Panel";
 import { useAction } from "../hooks/useAction";
-import { useMana, useOwnedCrystalEntities, usePrimaryCrystal } from "../hooks/useCrystals";
+import { useMana, useOwnedCrystalEntities } from "../hooks/useCrystals";
 import { levelUpCost, useEthBalance, useMintPrice, useStarterManaClaimed } from "../hooks/useGame";
 import { useMud } from "../mud/MudProvider";
+import { useSelectedCrystal } from "../mud/CrystalSelection";
 import { truncateTokenId } from "../lib/format";
 
 /** Mana and ETH are both 18-decimal; trimming the tail keeps the columns readable. */
@@ -58,7 +59,7 @@ export function ForgePanel() {
 
 export function SanctuaryPanel() {
   const { systemCalls } = useMud();
-  const crystal = usePrimaryCrystal();
+  const crystal = useSelectedCrystal();
   const mana = useMana(crystal?.entity);
   const claimed = useStarterManaClaimed(crystal?.entity);
   const { pending, run } = useAction();
@@ -114,16 +115,6 @@ export function SanctuaryPanel() {
           fonte.
         </p>
       ) : null}
-    </Panel>
-  );
-}
-
-export function ArenaPanel() {
-  return (
-    <Panel title="L'Arena" hint="commit-reveal, elementi, scommesse" accent="lavender">
-      <p className="muted">
-        Le mosse restano nascoste finché entrambi i giocatori non rivelano. Nessuna lobby aperta.
-      </p>
     </Panel>
   );
 }
