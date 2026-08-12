@@ -47,6 +47,20 @@
     @apply bg-solarpunk-mint;
   }
 
+  /**
+   * The crystal selector. `appearance-none` strips the platform widget — a native select renders
+   * as a rounded macOS control that reads as a foreign object against flat ink outlines — and the
+   * chevron is an inline data-URI so the look survives without a network request or an icon set.
+   */
+  .select {
+    @apply appearance-none border-2 border-ink bg-white py-1 pl-2.5 pr-7 font-mono text-xs shadow-line-sm;
+    @apply cursor-pointer focus:outline-none focus:shadow-line;
+    background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%232E3454' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 0.55rem center;
+    background-size: 0.6rem;
+  }
+
   .heading {
     @apply text-lg font-semibold tracking-tight;
   }

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useComponentValue, useEntityQuery } from "@latticexyz/react";
-import { Has, type Entity } from "@latticexyz/recs";
+import { Has, HasValue, getComponentValue, type Entity } from "@latticexyz/recs";
 import { encodeEntity } from "@latticexyz/store-sync/recs";
 import type { Hex } from "viem";
 
@@ -94,6 +94,78 @@ export function isLive(lobby: Lobby): boolean {
 
 export function isEmptyEntity(entity: Entity): boolean {
   return !entity || entity === ZERO_ENTITY;
+}
+
+export type MatchResult = {
+  lobby: Lobby;
+  opponent: Entity;
+  /** "win" | "loss" | "draw", from the point of view of the crystal that asked. */
+  outcome: "win" | "loss" | "draw";
+  /** NET mana change, not the pot: the winner staked the wager too, so it gains exactly `wager`. */
+  delta: bigint;
+};
+
+/**
+ * The most recent settled matches this crystal fought in, newest first.
+ *
+ * Two deliberate differences from `useLobbyIds`, both driven by the data rather than by taste:
+ *
+ *   - the query is `HasValue(..., { status: Resolved })`, not `Has`. A lobby moving Matched ->
+ *     Resolved does not change WHICH entities exist, so a `Has` query would not re-run and a match
+ *     would only appear in the history after some unrelated render. With `HasValue` the entity
+ *     ENTERS the query as its status changes, which is exactly the event we want.
+ *   - values are read inside the memo here, which would have been a bug in the live list. It is
+ *     safe in this one because `Resolved` is TERMINAL: nothing in `ArenaSystem` writes a lobby
+ *     again once it settles, so these records are immutable from here on.
+ *
+ * `Cancelled` is excluded on purpose — a withdrawn lobby or a match where nobody revealed is not a
+ * battle, and both sides were refunded, so it has no outcome to report.
+ */
+export function useResolvedMatches(player: Entity | undefined, limit = 8): MatchResult[] {
+  const { components } = useMud();
+  const resolved = useEntityQuery([HasValue(components.ArenaLobby, { status: LOBBY_STATUS.Resolved })]);
+
+  return useMemo(() => {
+    if (!player) return [];
+
+    return resolved
+      .map((entity) => {
+        const data = getComponentValue(components.ArenaLobby, entity);
+        if (!data) return undefined;
+
+        const challenger = data.challenger as Entity;
+        const opponent = data.opponent as Entity;
+        if (challenger !== player && opponent !== player) return undefined;
+
+        const winner = data.winner as Entity;
+        const wager = data.wager as bigint;
+
+        const outcome: MatchResult["outcome"] = isEmptyEntity(winner)
+          ? "draw"
+          : winner === player
+            ? "win"
+            : "loss";
+
+        return {
+          lobby: {
+            id: entity as Hex,
+            challenger,
+            opponent,
+            winner,
+            wager,
+            createdAt: Number(data.createdAt),
+            matchedAt: Number(data.matchedAt),
+            status: Number(data.status),
+          },
+          opponent: challenger === player ? opponent : challenger,
+          outcome,
+          delta: outcome === "draw" ? 0n : wager,
+        } satisfies MatchResult;
+      })
+      .filter((result): result is MatchResult => result !== undefined)
+      .sort((a, b) => b.lobby.matchedAt - a.lobby.matchedAt)
+      .slice(0, limit);
+  }, [resolved, player, components, limit]);
 }
 
 export function formatCountdown(seconds: number): string {

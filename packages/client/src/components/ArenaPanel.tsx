@@ -4,7 +4,7 @@ import type { Entity } from "@latticexyz/recs";
 
 import { Panel } from "./Panel";
 import { useAction } from "../hooks/useAction";
-import { useMana, type OwnedCrystal } from "../hooks/useCrystals";
+import { useCrystal, useMana, type OwnedCrystal } from "../hooks/useCrystals";
 import {
   formatCountdown,
   isEmptyEntity,
@@ -14,6 +14,8 @@ import {
   useLobby,
   useLobbyIds,
   useNow,
+  useResolvedMatches,
+  type MatchResult,
 } from "../hooks/useArena";
 import {
   ELEMENT,
@@ -270,6 +272,52 @@ function LobbyRow({ lobbyEntity, crystal }: { lobbyEntity: Entity; crystal: Owne
   );
 }
 
+const OUTCOME = {
+  win: { label: "Vittoria", accent: "bg-solarpunk-mint", sign: "+" },
+  loss: { label: "Sconfitta", accent: "bg-solarpunk-peach", sign: "−" },
+  draw: { label: "Pareggio", accent: "bg-white", sign: "" },
+} as const;
+
+function HistoryRow({ result }: { result: MatchResult }) {
+  // The opponent's CURRENT level — the chain does not record the level they fought at.
+  const opponent = useCrystal(result.opponent);
+  const { label, accent, sign } = OUTCOME[result.outcome];
+
+  return (
+    <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-b border-dashed border-ink/25 py-2 last:border-b-0">
+      <span className="text-sm">
+        <span className={`chip mr-2 ${accent}`}>{label}</span>
+        contro {truncateAddress(result.opponent, 6, 4)}
+        {opponent ? ` (Livello ${opponent.level})` : ""}
+      </span>
+      <span className="font-mono text-sm">
+        {sign}
+        {formatEther(result.delta)} MANA
+      </span>
+    </div>
+  );
+}
+
+function MatchHistory({ crystal }: { crystal: OwnedCrystal }) {
+  const matches = useResolvedMatches(crystal.entity);
+
+  return (
+    <div className="panel-flat mt-6 px-4 py-4">
+      <h3 className="heading mb-1 text-base">Ultime battaglie</h3>
+      <p className="muted mb-3">
+        Guadagno netto, non il piatto: chi vince aveva a sua volta messo la posta. Il livello è
+        quello ATTUALE dell&apos;avversario — la chain non registra quello al momento dello scontro.
+      </p>
+
+      {matches.length === 0 ? (
+        <p className="muted">Nessuna battaglia conclusa.</p>
+      ) : (
+        matches.map((result) => <HistoryRow key={result.lobby.id} result={result} />)
+      )}
+    </div>
+  );
+}
+
 export function ArenaPanel() {
   const crystal = useSelectedCrystal();
   const lobbyIds = useLobbyIds();
@@ -296,6 +344,8 @@ export function ArenaPanel() {
       ) : (
         lobbyIds.map((id) => <LobbyRow key={id} lobbyEntity={id} crystal={crystal} />)
       )}
+
+      <MatchHistory crystal={crystal} />
     </Panel>
   );
 }
