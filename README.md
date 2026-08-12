@@ -209,9 +209,6 @@ pnpm test        # 147 contract tests (deploys a World, then runs forge test) + 
 pnpm build       # contracts codegen + client production bundle
 ```
 
-> The `banner.jpg` referenced above is a placeholder — drop the concept art at
-> `docs/assets/banner.jpg` and it renders.
-
 ---
 
 ## Project Status
