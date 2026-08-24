@@ -85,9 +85,24 @@ export default defineWorld({
      * Commit-reveal state, one record per player per match. Keyed by both so the two
      * sides of a match never collide and each can be read independently.
      *
-     * `commitment` is keccak256(abi.encodePacked(move, salt)) and is written when the
-     * player enters the match; `move` stays `None` until that player reveals.
-     * `revealed` is the authoritative flag — do not infer it from `move != None`, since
+     * `commitment` is keccak256(abi.encodePacked(lobbyId, playerEntity, move, salt)), bound to both
+     * the match and the player since phase 3.6: a commitment can be neither replayed in another
+     * lobby nor lifted onto another player. The single definition lives in
+     * `ArenaSystem._commitmentOf` — never re-derive it anywhere else.
+     *
+     * Mind the encoding, because the two hashes in this game deliberately differ and swapping them
+     * fails SILENTLY. This one is `abi.encodePacked`, 97 bytes, in which `move` occupies a single
+     * byte because a Solidity enum is a uint8; encoding it as uint256 would shift the salt by 31
+     * bytes. The lobby id, by contrast, is `keccak256(abi.encode(challengerEntity, lobbySalt))` —
+     * padded, 64 bytes. A malformed commitment is not rejected at commit time (the contract only
+     * ever sees a hash) but an hour later at reveal, with the wager already escrowed.
+     *
+     * The binding does NOT substitute for salt entropy: `lobbyId` and `playerEntity` are both
+     * public, so it raises the cost of a mass sweep, not of a targeted one. Only the salt hides
+     * the move, and the client must draw a fresh random one per match.
+     *
+     * The record is written when the player enters the match; `move` stays `None` until that player
+     * reveals. `revealed` is the authoritative flag — do not infer it from `move != None`, since
      * a future move enum could legitimately include a zero-valued entry.
      *
      * Static width: 32 + 1 + 1 = 34 bytes, two slots.
@@ -104,14 +119,18 @@ export default defineWorld({
     },
 
     /**
-     * Provisional ownership ledger, keyed by the crystal's entity (its ERC-6551 account).
+     * THE authoritative ownership ledger, keyed by the crystal's entity (its ERC-6551 account).
      *
-     * This is a STOPGAP and is deliberately not the long-term source of truth. Once the ERC-721
-     * facade exists, `ownerOf(tokenId)` becomes authoritative and this table must either be
-     * retired or demoted to a mirror kept in sync by the facade. Two writers for one fact is a
-     * divergence bug waiting to happen, so it must never be left as-is after the facade lands.
+     * Phase 4 provisionally called this a stopgap to be retired once the ERC-721 facade existed.
+     * Phase 7 settled it the other way round, and this table is now PERMANENT: `CrystalNFT` holds
+     * no ownership state of its own and its `ownerOf` reads back from here. The divergence risk
+     * that motivated the stopgap note never materialised because there is exactly one writer per
+     * operation — `CrystalForgeSystem` on mint, `TokenBridgeSystem` on transfer — and no System
+     * ever calls a token contract.
      *
-     * Note the asymmetry that makes this safe in the meantime: the OWNER is an EOA (or any
+     * `CrystalBalance` is derived from this table: every write here MUST move it in the same call.
+     *
+     * Note the asymmetry that makes ownership cheap to move: the OWNER is an EOA (or any
      * contract) and may change hands freely, while the ENTITY is the token bound account and is
      * immutable for the life of the crystal. Everything the game keys on — CrystalData,
      * ManaBalance, ArenaLobby — hangs off the entity, so a transfer of ownership moves no game

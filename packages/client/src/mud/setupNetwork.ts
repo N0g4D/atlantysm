@@ -17,7 +17,8 @@ import { encodeEntity, syncToRecs } from "@latticexyz/store-sync/recs";
 
 import { getNetworkConfig } from "./getNetworkConfig";
 import { world } from "./world";
-import IWorldAbi from "contracts/out/IWorld.sol/IWorld.abi.json";
+// See createSystemCalls.ts: `abi/` is the committed copy of Foundry's gitignored `out/`.
+import IWorldAbi from "contracts/abi/IWorld.abi.json";
 import { createBurnerAccount, transportObserver, ContractWrite } from "@latticexyz/common";
 import { transactionQueue, writeObserver } from "@latticexyz/common/actions";
 
@@ -42,9 +43,22 @@ export async function setupNetwork() {
    * Create a viem public (read only) client
    * (https://viem.sh/docs/clients/public.html)
    */
+  /*
+   * Offer the WebSocket transport ONLY when the chain actually declares one.
+   *
+   * viem's `webSocket()` resolves its url from `chain.rpcUrls.default.webSocket[0]` and throws
+   * `UrlRequiredError` when there is none — which is the case for Sepolia. `fallback` does not
+   * rescue that: it instantiates each transport OUTSIDE its own try/catch, so the throw escapes
+   * before `http()` is ever tried and EVERY rpc call fails. Combined with the missing error
+   * boundary (open point 2 at code freeze) the symptom is a permanently blank page, with the real
+   * cause visible only in the console.
+   */
+  const webSocketUrl = networkConfig.chain.rpcUrls.default.webSocket?.[0];
+  const transports = webSocketUrl ? [webSocket(), http()] : [http()];
+
   const clientOptions = {
     chain: networkConfig.chain,
-    transport: transportObserver(fallback([webSocket(), http()])),
+    transport: transportObserver(fallback(transports)),
     pollingInterval: 1000,
   } as const satisfies ClientConfig;
 

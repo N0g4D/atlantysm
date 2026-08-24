@@ -24,6 +24,26 @@ fs_permissions = [{ access = "read", path = "./"}]
 [profile.default.fuzz]
 runs = 256
 
+# Ethereum Sepolia (chain id 11155111).
+#
+# The endpoint is a literal, NOT "${SEPOLIA_RPC_URL}": Foundry does not expand env vars in this
+# field, and `forge config --json` — which is exactly how MUD reads it — hands back the unexpanded
+# string, so a deploy would be pointed at a URL called "${SEPOLIA_RPC_URL}". Verified, not assumed.
+# (`[rpc_endpoints]` does support interpolation, but MUD reads `eth_rpc_url`.)
+#
+# publicnode is the default because it actually answers: viem's own Sepolia default,
+# https://sepolia.drpc.org, now returns "chain is not available on free plan".
+# It is rate-limited, so for a deploy you will want your own key — override per command:
+#
+#     RPC_URL="https://eth-sepolia.g.alchemy.com/v2/<KEY>" pnpm deploy:sepolia
+#
+# FOOTGUN, and the reason RPC_URL is not in .env.example: MUD resolves the endpoint as
+#   FOUNDRY_ETH_RPC_URL || RPC_HTTP_URL || RPC_URL || <profile>.eth_rpc_url || 127.0.0.1:8545
+# RPC_URL therefore outranks EVERY profile. Left sitting in .env it would make `pnpm deploy:local`
+# silently deploy to Sepolia. Pass it inline for the one command that needs it.
+[profile.sepolia]
+eth_rpc_url = "https://ethereum-sepolia-rpc.publicnode.com"
+
 [profile.garnet]
 eth_rpc_url = "https://rpc.garnetchain.com"
 

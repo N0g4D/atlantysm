@@ -11,3 +11,10 @@ node_modules
 
 # local-only agent settings
 .claude/settings.local.json
+
+# secrets. A Sepolia deploy key lives in packages/contracts/.env and must never be committed;
+# .env.example carries the placeholders instead.
+.env
+!.env.example
+# packages/client/.env is already tracked on purpose: it holds VITE_CHAIN_ID and nothing secret.
+!packages/client/.env

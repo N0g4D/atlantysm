@@ -6,9 +6,12 @@ import { encodeFunctionData, getAddress, type Hex } from "viem";
 import { getComponentValue, type Entity } from "@latticexyz/recs";
 import { singletonEntity } from "@latticexyz/store-sync/recs";
 
-import IWorldAbi from "contracts/out/IWorld.sol/IWorld.abi.json";
-import CrystalNFTAbi from "contracts/out/CrystalNFT.sol/CrystalNFT.abi.json";
-import AtlantysmAccountAbi from "contracts/out/AtlantysmAccount.sol/AtlantysmAccount.abi.json";
+// `contracts/abi/*` rather than `contracts/out/*`: Foundry's `out/` is gitignored, so a clean
+// checkout (a Vercel build) does not have it and the bundle fails to resolve these. `abi/` is the
+// committed copy, refreshed by `pnpm --filter contracts build`. See scripts/export-abis.mjs.
+import IWorldAbi from "contracts/abi/IWorld.abi.json";
+import CrystalNFTAbi from "contracts/abi/CrystalNFT.abi.json";
+import AtlantysmAccountAbi from "contracts/abi/AtlantysmAccount.abi.json";
 
 import { ClientComponents } from "./createClientComponents";
 import { SetupNetworkResult } from "./setupNetwork";
