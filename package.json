@@ -9,6 +9,7 @@
     "foundry:up": "curl -L https://foundry.paradigm.xyz | bash && bash $HOME/.foundry/bin/foundryup",
     "mud:up": "pnpm mud set-version --tag main && pnpm install",
     "prepare": "[ -n \"$CI\" ] || forge --version || pnpm foundry:up",
+    "promo:links": "tsx scripts/generatePromoLinks.ts",
     "test": "pnpm recursive run test"
   },
   "devDependencies": {
@@ -20,10 +21,13 @@
     "@types/node": "^20",
     "@typescript-eslint/eslint-plugin": "7.1.1",
     "@typescript-eslint/parser": "7.1.1",
+    "dotenv": "^17.4.2",
     "eslint": "8.57.0",
     "mprocs": "^0.7.3",
     "shx": "^0.3.4",
-    "typescript": "5.4.2"
+    "tsx": "^4.23.12",
+    "typescript": "5.4.2",
+    "viem": "2.35.1"
   },
   "engines": {
     "node": "^20",

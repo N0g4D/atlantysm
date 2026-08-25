@@ -211,11 +211,31 @@ one.
 ## 8. Playing it
 
 The client uses a **burner wallet** generated in the browser — there is no connect flow, and on
-Sepolia there is no "top up" button either, unlike local anvil. So:
+Sepolia there is no "top up" button either, unlike local anvil. A fresh visitor therefore lands
+with zero ETH and cannot even mint.
 
-1. Open the deployed site, copy the burner address from the navbar.
-2. Send it Sepolia ETH from your own wallet — enough for the mint price plus gas.
-3. Forge → faucet → level up → arena.
+**For a demo, hand out pre-funded links.** From the repo root:
+
+```bash
+cp .env.example .env          # then set MASTER_PRIVATE_KEY to your funded wallet
+# edit VERCEL_DOMAIN at the top of scripts/generatePromoLinks.ts
+
+pnpm promo:links --dry-run    # generate 50 links, spend nothing — check the domain is right
+pnpm promo:links              # generate + fund: 50 × 0.02 ETH ≈ 1.0 ETH
+```
+
+`promo_links.txt` then holds 50 URLs of the form `https://<domain>/?burner=0x<key>`. Give one to
+each visitor: they open it and are already holding 0.02 ETH — enough for the 0.01 mint plus gas for
+the rest of the loop. The client adopts the key, then **strips it from the address bar**.
+
+> **Each link is a bearer secret.** Whoever sees the URL owns that wallet. That is fine here —
+> disposable, testnet, ~$0 — but `promo_links.txt` is gitignored and should be treated like a bag
+> of cash. Do not paste the links into a shared channel.
+
+To fund a single wallet by hand instead: open the site, copy the burner address from the navbar,
+and send it Sepolia ETH from your own wallet.
+
+Then: Forge → faucet → level up → arena.
 
 > **Tell your demo audience not to clear site data.** Commit-reveal secrets live only in
 > `localStorage`, per-browser and per-origin. Clearing it, or switching device mid-match, means the
@@ -236,3 +256,6 @@ Sepolia there is no "top up" button either, unlike local anvil. So:
 | Site blank, no console error | Sync still running. Expected on first load — there is no loading state (known open point). |
 | `No world address found for chain 11155111` | `worlds.json` was not committed after the deploy. See step 5. |
 | Sync crawls, RPC 429s | Public RPC rate limit. Set `VITE_SEPOLIA_RPC_HTTP`. |
+| `promo_links.txt already exists` | Refusing to strand keys that may hold ETH. Move it aside, or `--force`. |
+| `RPC_URL is not Sepolia` | The endpoint reports another chain. The script refuses to send 1 ETH on it. |
+| Promo link opens with the wrong wallet | The key was malformed and ignored; check the console for `[atlantysm]`. |

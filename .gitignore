@@ -18,3 +18,8 @@ node_modules
 !.env.example
 # packages/client/.env is already tracked on purpose: it holds VITE_CHAIN_ID and nothing secret.
 !packages/client/.env
+
+# Promo links. Every line contains a live private key in a query string — this file IS the wallet
+# set, and nothing else records those keys. Never commit it.
+promo_links.txt
+promo_links.csv
