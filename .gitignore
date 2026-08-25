@@ -23,3 +23,6 @@ node_modules
 # set, and nothing else records those keys. Never commit it.
 promo_links.txt
 promo_links.csv
+
+# Ignore report logs
+*.txt

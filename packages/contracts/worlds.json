@@ -1,5 +1,9 @@
 {
   "31337": {
     "address": "0xfDf868Ea710FfD8cd33b829c5AFf79eDd15EcD5f"
+  },
+  "11155111": {
+    "address": "0x99b50Db22170c336998cc6D552Ea353B3f800207",
+    "blockNumber": 11564183
   }
 }
