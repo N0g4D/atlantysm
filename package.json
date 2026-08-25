@@ -1,6 +1,7 @@
 {
   "name": "mud-template-vanilla",
   "private": true,
+  "packageManager": "pnpm@9.1.0",
   "scripts": {
     "build": "pnpm recursive run build",
     "dev": "mprocs",
