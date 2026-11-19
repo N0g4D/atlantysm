@@ -47,6 +47,23 @@ Failing the deploy is the cheap outcome; discovering the mistake after the first
 expensive one. `testDeployRefusesToInventIdentityInputsOffTheDevChain` pins this, and removing the
 check makes it fail.
 
+> **Note added after the Sepolia deploy:** "set" turned out to be the wrong test on both rows.
+>
+> - **Anvil.** `.env.example` ships the canonical registry address, and that address is empty on a
+>   fresh anvil. The script trusted it because it was non-zero, so the documented local setup
+>   produced a World in which every mint reverted and 16 tests failed. On the dev chain an input
+>   with **no code** is now replaced by a dev deployment; one that has code is kept, so an anvil
+>   fork of a real network still behaves like that network.
+> - **Anything else.** Both inputs must now also **have code on the target chain**, or the deploy
+>   reverts with `PostDeploy_IdentityInputHasNoCode`. A typo or an address from another network was
+>   previously frozen in at the first mint exactly like a placeholder — and a dead implementation
+>   fails quietly, because a proxy delegatecalling an empty address succeeds and does nothing.
+>
+> The decision lives in `_resolveIdentityInputs(registry, implementation)`, which takes the
+> environment values as arguments so each branch is tested with explicit inputs
+> (`testOnTheDevChain…`, `testOffTheDevChain…`). Mutation-checked: restoring the old dev-chain
+> behaviour fails 17 tests, and dropping the has-code check fails 1.
+
 Optional environment variables: `MINT_PRICE` (default `0.01 ether`), `ERC6551_REGISTRY`,
 `ERC6551_ACCOUNT_IMPLEMENTATION`.
 

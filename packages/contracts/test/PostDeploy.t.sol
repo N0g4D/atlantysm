@@ -8,9 +8,23 @@ import { ICrystalForgeSystem } from "../src/codegen/world/ICrystalForgeSystem.so
 import { CrystalNFT } from "../src/tokens/CrystalNFT.sol";
 import { ManaToken } from "../src/tokens/ManaToken.sol";
 import { DevERC6551Registry } from "../src/dev/DevERC6551Registry.sol";
+import { AtlantysmAccount } from "../src/accounts/AtlantysmAccount.sol";
 import { CrystalData, CrystalOwner, ForgeConfig, ManaBalance } from "../src/codegen/index.sol";
 import { Element } from "../src/codegen/common.sol";
 import { PostDeploy } from "../script/PostDeploy.s.sol";
+
+/**
+ * @dev Exposes the script's identity decision so every branch can be driven with explicit inputs.
+ *
+ * The alternative — `vm.setEnv` followed by `run` — mutates process-wide state while forge runs
+ * tests in parallel, so one test's variables would leak into another's script run. The script reads
+ * the environment in exactly one place and passes the values down, and this is the seam that buys.
+ */
+contract PostDeployHarness is PostDeploy {
+  function resolveIdentityInputs(address registry, address implementation) external returns (address, address) {
+    return _resolveIdentityInputs(registry, implementation);
+  }
+}
 
 /**
  * @dev Verifies the state `PostDeploy` actually leaves behind.
@@ -30,6 +44,16 @@ contract PostDeployTest is MudTest {
   uint256 internal constant EXPECTED_MINT_PRICE = 0.01 ether;
   uint128 internal constant STARTER_MANA = 100 ether;
   uint128 internal constant BASE_COST = 50 ether;
+
+  /// @dev The canonical ERC-6551 registry (v0.3.1), the value `.env.example` ships. It is a real
+  /// contract on Sepolia and on mainnet, and an EMPTY address on a fresh anvil — which is the whole
+  /// regression the identity tests below pin.
+  address internal constant CANONICAL_REGISTRY = 0x000000006551c19487814612e58FE06813775758;
+
+  /// @dev Stands in for "an address pasted from another network": plausible, non-zero, no code.
+  address internal constant ADDRESS_WITH_NO_CODE = address(0xDEAD6551);
+
+  uint256 internal constant NOT_THE_DEV_CHAIN = 8453;
 
   function setUp() public override {
     super.setUp();
@@ -59,6 +83,10 @@ contract PostDeployTest is MudTest {
     assertTrue(registry != address(0), "registry set");
     assertTrue(implementation != address(0), "implementation set");
     assertTrue(registry.code.length > 0, "the registry is a real contract on this chain");
+    // An implementation with no code is the quieter failure of the two: the registry would still
+    // deploy 173-byte proxies, and a proxy that delegatecalls an empty address SUCCEEDS and does
+    // nothing — every `callSystem` would report success while no System ever ran.
+    assertTrue(implementation.code.length > 0, "and so is the account implementation");
 
     // The ERC-6551 token contract must be the NFT that actually owns the ids, not a placeholder.
     assertEq(tokenContract, address(nft), "identity is bound to the deployed NFT");
@@ -112,11 +140,126 @@ contract PostDeployTest is MudTest {
     vm.prank(vm.addr(vm.envUint("PRIVATE_KEY")));
     ForgeConfig.set(address(0), address(0), address(0), bytes32(0));
 
-    vm.chainId(8453);
+    // This is the one test that runs the WHOLE script, so it is the one test that reads the real
+    // environment — and a developer's `.env` legitimately carries Sepolia values. Blank both, or
+    // the outcome would depend on whose machine this runs on. Safe under parallel execution only
+    // because nothing else in the suite reads these two variables: every other identity test goes
+    // through `PostDeployHarness` with explicit arguments.
+    vm.setEnv("ERC6551_REGISTRY", "");
+    vm.setEnv("ERC6551_ACCOUNT_IMPLEMENTATION", "");
+
+    vm.chainId(NOT_THE_DEV_CHAIN);
 
     PostDeploy script = new PostDeploy();
-    vm.expectRevert(abi.encodeWithSelector(PostDeploy.PostDeploy_MissingIdentityConfig.selector, uint256(8453)));
+    vm.expectRevert(abi.encodeWithSelector(PostDeploy.PostDeploy_MissingIdentityConfig.selector, NOT_THE_DEV_CHAIN));
     script.run(worldAddress);
+  }
+
+  /// @dev Half a configuration is no configuration: either input missing is refused, whichever it is.
+  function testOffTheDevChainBothIdentityInputsAreRequired() public {
+    PostDeployHarness script = new PostDeployHarness();
+    address registry = address(new DevERC6551Registry());
+    address implementation = address(new AtlantysmAccount());
+
+    vm.chainId(NOT_THE_DEV_CHAIN);
+    bytes memory missing = abi.encodeWithSelector(
+      PostDeploy.PostDeploy_MissingIdentityConfig.selector,
+      NOT_THE_DEV_CHAIN
+    );
+
+    vm.expectRevert(missing);
+    script.resolveIdentityInputs(address(0), address(0));
+
+    vm.expectRevert(missing);
+    script.resolveIdentityInputs(registry, address(0));
+
+    vm.expectRevert(missing);
+    script.resolveIdentityInputs(address(0), implementation);
+  }
+
+  /**
+   * @dev A non-zero address is not evidence of a contract. Before this guard, a typo or an address
+   * copied from another network passed the "is it set" check and was frozen into `ForgeConfig` at
+   * the first mint, exactly as permanently as a placeholder. The error names the variable so the
+   * message points at a line of `.env`.
+   */
+  function testOffTheDevChainAnIdentityInputWithNoCodeIsRefused() public {
+    PostDeployHarness script = new PostDeployHarness();
+    address registry = address(new DevERC6551Registry());
+    address implementation = address(new AtlantysmAccount());
+
+    vm.chainId(NOT_THE_DEV_CHAIN);
+
+    vm.expectRevert(
+      abi.encodeWithSelector(
+        PostDeploy.PostDeploy_IdentityInputHasNoCode.selector,
+        "ERC6551_REGISTRY",
+        ADDRESS_WITH_NO_CODE
+      )
+    );
+    script.resolveIdentityInputs(ADDRESS_WITH_NO_CODE, implementation);
+
+    vm.expectRevert(
+      abi.encodeWithSelector(
+        PostDeploy.PostDeploy_IdentityInputHasNoCode.selector,
+        "ERC6551_ACCOUNT_IMPLEMENTATION",
+        ADDRESS_WITH_NO_CODE
+      )
+    );
+    script.resolveIdentityInputs(registry, ADDRESS_WITH_NO_CODE);
+  }
+
+  /// @dev The production path itself, which phase 8 left "reasoned about, not run": real inputs
+  /// are used exactly as given, never swapped for dev deployments.
+  function testOffTheDevChainRealIdentityInputsAreUsedAsGiven() public {
+    PostDeployHarness script = new PostDeployHarness();
+    address registry = address(new DevERC6551Registry());
+    address implementation = address(new AtlantysmAccount());
+
+    vm.chainId(NOT_THE_DEV_CHAIN);
+    (address resolvedRegistry, address resolvedImplementation) = script.resolveIdentityInputs(registry, implementation);
+
+    assertEq(resolvedRegistry, registry, "the supplied registry is the one that gets frozen");
+    assertEq(resolvedImplementation, implementation, "and so is the supplied implementation");
+  }
+
+  /**
+   * @dev THE REGRESSION. `.env.example` ships the canonical registry address, and one `.env` serves
+   * Sepolia and local development alike. On a fresh anvil that address is empty, and the script
+   * used to trust it anyway: the World deployed, every mint reverted, and 16 tests failed for
+   * anyone who followed the documented setup.
+   *
+   * On the dev chain an input with no code must be replaced, not believed.
+   */
+  function testOnTheDevChainAnIdentityInputWithNoCodeIsReplaced() public {
+    assertEq(CANONICAL_REGISTRY.code.length, 0, "precondition: the canonical registry is absent on a fresh anvil");
+
+    PostDeployHarness script = new PostDeployHarness();
+
+    // Exactly what `cp .env.example .env` produces: registry filled in, implementation blank.
+    (address registry, address implementation) = script.resolveIdentityInputs(CANONICAL_REGISTRY, address(0));
+    assertTrue(registry != CANONICAL_REGISTRY, "an empty address must not be wired as the registry");
+    assertTrue(registry.code.length > 0, "a dev registry is deployed in its place");
+    assertTrue(implementation.code.length > 0, "and the blank implementation gets a real one");
+
+    // And what a developer's `.env` looks like after a Sepolia deploy: both filled in, neither here.
+    (registry, implementation) = script.resolveIdentityInputs(CANONICAL_REGISTRY, ADDRESS_WITH_NO_CODE);
+    assertTrue(registry.code.length > 0, "registry replaced");
+    assertTrue(implementation != ADDRESS_WITH_NO_CODE, "an empty address must not be wired as the implementation");
+    assertTrue(implementation.code.length > 0, "implementation replaced");
+  }
+
+  /// @dev The other half of the same rule, and what keeps an anvil FORK of a real network honest:
+  /// inputs that do exist on this chain are kept, not shadowed by dev deployments.
+  function testOnTheDevChainIdentityInputsThatExistAreKept() public {
+    PostDeployHarness script = new PostDeployHarness();
+    address registry = address(new DevERC6551Registry());
+    address implementation = address(new AtlantysmAccount());
+
+    (address resolvedRegistry, address resolvedImplementation) = script.resolveIdentityInputs(registry, implementation);
+
+    assertEq(resolvedRegistry, registry, "an existing registry is kept");
+    assertEq(resolvedImplementation, implementation, "an existing implementation is kept");
   }
 
   // ---------------------------------------------------------------------------------------------

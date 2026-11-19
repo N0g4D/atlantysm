@@ -183,7 +183,7 @@ mid-mint, a reentrancy surface bought for nothing when the price is readable bef
 | --- | --- |
 | On-chain framework | **MUD v2** (`2.2.23`) — ECS, tables & systems |
 | Contracts | **Solidity `^0.8.24`**, **OpenZeppelin 5** |
-| Toolchain & tests | **Foundry** (`forge`) — 147 tests across 6 suites |
+| Toolchain & tests | **Foundry** (`forge`) — 152 tests across 6 suites |
 | Client | **React 18** + **Vite** |
 | Chain access | **viem** |
 | Styling | **Tailwind CSS 3** — a custom *Soft Brutalism* system: flat fills, 2px `ink` outlines, hard offset shadows, no blur, no UI library |
@@ -196,16 +196,21 @@ mid-mint, a reentrancy surface bought for nothing when the price is readable bef
 Requires **Node 20**, **pnpm 9**, and **Foundry**.
 
 ```bash
-pnpm install     # install the workspace (contracts + client)
-pnpm dev         # mprocs: anvil, contract deploy + watch, client, and the MUD explorer
+pnpm install                                                    # install the workspace (contracts + client)
+cp packages/contracts/.env.example packages/contracts/.env      # local deployer key; `.env` is gitignored
+pnpm dev                                                        # mprocs: anvil, contract deploy + watch, client, and the MUD explorer
 ```
+
+The `.env` step is not optional: without it the deploy stops at `Missing PRIVATE_KEY environment
+variable`. The example file carries anvil's well-known first key, and its Sepolia values are ignored
+on a local chain.
 
 Open <http://localhost:3000>. The client uses a **burner wallet** generated in your browser, so
 there is no connect flow — but it starts with zero ETH, and minting costs real ETH. Fund it with
 **“top up”** in the MUD Dev Tools panel (bottom right) before forging your first crystal.
 
 ```bash
-pnpm test        # 147 contract tests (deploys a World, then runs forge test) + client typecheck
+pnpm test        # 152 contract tests (deploys a World, then runs forge test) + client typecheck
 pnpm build       # contracts codegen + client production bundle
 ```
 
@@ -222,7 +227,7 @@ Ratified as non-blocking, and worth knowing before extending the client:
   move can no longer be revealed, and the match is lost by timeout. An export/import path, or
   deterministic derivation from a wallet signature, is the natural fix.
 - **No loading or error boundary in the client.** The page is blank until the MUD sync completes.
-- **No client-side test suite.** All 147 tests cover the contracts; client verification so far has
+- **No client-side test suite.** All 152 tests cover the contracts; client verification so far has
   been manual.
 
 ---
