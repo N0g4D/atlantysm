@@ -205,7 +205,10 @@ Filled in by T02 and kept current.
   backend) or `@zama-fhe/relayer-sdk` (deprecated). Start from the official `react-wagmi` example at the
   installed version's tag.
 - **Runtime:** Node 24 for the whole workspace from T01 (Node 20 reached end of life in April 2026), pnpm 9 from
-  `packageManager`. CI and Vercel take the version from `.nvmrc` and the root `engines`.
+  `packageManager`. CI and Vercel take the version from `.nvmrc` and the root `engines`. Two leftovers belong to the
+  frozen MVP: its MUD indexer asks for `better-sqlite3` 8, which does not build on Node 24, so the root
+  `pnpm.overrides` lifts it to 12; and `@types/node` stays at 20, because version 24 needs a newer TypeScript than
+  the 5.4.2 the MVP pins.
 - **Relayer:** the Sepolia relayer is open and needs no API key. Mainnet needs one; that is a later problem.
 - **Reference:** Zama's agent skills (`zama-ai/skills`), enabled for the repository in `.claude/settings.json`.
 

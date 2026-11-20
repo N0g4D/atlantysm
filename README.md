@@ -193,7 +193,7 @@ mid-mint, a reentrancy surface bought for nothing when the price is readable bef
 
 ## Getting Started
 
-Requires **Node 20**, **pnpm 9**, and **Foundry**.
+Requires **Node 24**, **pnpm 9**, and **Foundry**.
 
 ```bash
 pnpm install                                                    # install the workspace (contracts + client)
