@@ -87,7 +87,7 @@ apart.
 *(parameter)*.
 
 **Where the MANA goes.** Spent MANA flows to the centre and becomes the season's prize. Individual contributions
-stay encrypted; only the season total is ever revealed.
+stay encrypted, and so does the total (§8).
 
 **What others can know.** From a crystal's public income and record, anyone can work out the highest level it
 could have reached. Never the level it has.
@@ -125,13 +125,16 @@ the game.
 A season lasts **four weeks** *(parameter)*. A new season resets the ranking only: crystals keep their level,
 MANA and record.
 
-**Ranking.** Crystals are ranked by Arena wins in the season. Ties go to fewer losses, then to whoever reached
-the score first. A duel counts for the season in which it was fought, once its result is published. A season can
+**Ranking.** Crystals are ranked by Arena wins in the season. Ties go to whoever reached the score first, counting
+duels in the order they were fought. A duel counts for the season in which it was fought, once its result is
+published. A season can
 be closed **1 hour** after it ends *(parameter)*; results published later count only in the crystals' records.
 
 **The prize.** When a season is closed, the centre is credited to the top three crystals in encrypted shares:
 **50%, 30% and 20%** *(parameter)*. Its total is never published, and each winner sees only its own share. With
-few players, a published total would reveal what individual crystals had spent.
+few players, a published total would reveal what individual crystals had spent. A share with no crystal to take
+it, because fewer than three were ranked or one has been shattered, stays in the centre for the season in
+progress.
 
 **Known weakness.** A player with several crystals can duel themselves to inflate their wins, and no on-chain
 ranking can rule that out entirely. That is acceptable in Season 0, where nothing has monetary value, and must be
