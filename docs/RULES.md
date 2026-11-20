@@ -48,13 +48,14 @@ bug fix.
 Whoever wants more weight in the world forges more crystals. The charge is held by the Monolith and recorded
 against the crystal.
 
-At birth, encrypted on-chain randomness gives the crystal its **element**: Fire, Water or Earth, one chance in
-three each. Nobody chooses it, not even the forger. The crystal starts at **level 1** with **0 MANA**. Element,
+At birth, encrypted on-chain randomness gives the crystal its **element**: one of the three colours of the
+Monolith's white light, **Red (Fire)**, **Green (Earth)** or **Blue (Water)**, one chance in three each. Nobody
+chooses it, not even the forger. The crystal starts at **level 1** with **0 MANA**. Element,
 level and MANA are encrypted from the first block, and only the owner can read them.
 
 **The element never changes.** It is the crystal's nature and its move in the Arena.
 
-**Shattering.** The owner can shatter a crystal that is not in a lobby or a duel. The crystal is burned and its
+**Shattering.** The owner can shatter a crystal that is not waiting in an open lobby. The crystal is burned and its
 charge is returned to the owner; in Season 0 its unspent MANA returns to the centre. Because shattering always
 returns the charge, a crystal is never worth less than its charge. On any market the charge is the floor, and
 everything above it is the price of the crystal's level, element and record.
@@ -62,7 +63,7 @@ everything above it is the price of the crystal's level, element and record.
 **Ownership.** Crystals are transferable tokens (ERC-721), and their secrets travel with them. On a transfer the
 level and MANA are sealed again for the new owner, so previous owners lose sight of them. The element cannot be
 sealed again in the same way: it never changes, so everyone who has ever owned the crystal keeps knowing it. A
-crystal in an open lobby or a duel cannot be transferred or shattered.
+crystal waiting in an open lobby cannot be transferred or shattered.
 
 **Record.** Every crystal's wins and losses are public and permanent.
 
@@ -93,7 +94,8 @@ could have reached. Never the level it has.
 
 ## 7. The Arena: duels
 
-**The triangle.** Water beats Fire, Fire beats Earth, Earth beats Water.
+**The triangle.** Water beats Fire, Fire beats Earth, Earth beats Water. In colours: in the order Red, Green,
+Blue each colour beats the next, and Blue beats Red to close the circle.
 
 **The move is the crystal.** A player chooses which crystal to bring, and that crystal's element is the move.
 There is no other choice to make inside a duel.
@@ -102,16 +104,17 @@ There is no other choice to make inside a duel.
 an encrypted coin decides. Every duel has exactly one winner and one loser.
 
 **Lobbies.** A player opens a lobby with one crystal and a public **stake** in MANA. Anyone can join it with one
-crystal of their own. A crystal can be in one lobby or duel at a time. The creator can cancel a lobby that nobody
+crystal of their own. A crystal can wait in one open lobby at a time. The creator can cancel a lobby that nobody
 has joined after **24 hours** *(parameter)*.
 
-**Stakes and forfeits.** Both crystals put up the stake from their encrypted balances. A crystal that cannot cover
-the stake loses by forfeit, and nobody can tell a forfeit from a defeat. If neither crystal can cover it, the duel
-is decided as usual and no MANA moves.
+**Stakes and forfeits.** The creator puts up the stake when opening the lobby, the challenger when joining, both
+from their encrypted balances. A crystal that cannot cover the stake loses by forfeit, and nobody can tell a
+forfeit from a defeat. If neither crystal can cover it, the duel is decided as usual and no MANA moves.
 
-**Resolution.** The outcome is computed on encrypted data. Only the winner is decrypted and published, with a
-proof that the contract verifies. Anyone can submit the published result to settle the duel, so no player can
-stall it by staying away. The winner takes the pot: both stakes, or only its own back if the loser forfeited.
+**Resolution.** The duel is fought the moment the challenger joins. The outcome is computed on encrypted data and
+the stakes move at once, still encrypted: the winner takes the pot, which is both stakes, or only its own back if
+the loser forfeited. Then only the winner is decrypted and published, with a proof that the contract verifies.
+Anyone can submit the published result, so no player can stall it by staying away.
 
 **What a duel reveals.** The two crystals, the stake and the winner. Each player also knows their own crystal's
 element and level, so every duel tells them something about the opponent. Deducing who is who, and hiding it, is
@@ -123,10 +126,12 @@ A season lasts **four weeks** *(parameter)*. A new season resets the ranking onl
 MANA and record.
 
 **Ranking.** Crystals are ranked by Arena wins in the season. Ties go to fewer losses, then to whoever reached
-the score first.
+the score first. A duel counts for the season in which it was fought, once its result is published. A season can
+be closed **1 hour** after it ends *(parameter)*; results published later count only in the crystals' records.
 
-**The prize.** At the end of a season the centre's total is decrypted and published, and it is credited to the
-top three crystals: **50%, 30% and 20%** *(parameter)*.
+**The prize.** When a season is closed, the centre is credited to the top three crystals in encrypted shares:
+**50%, 30% and 20%** *(parameter)*. Its total is never published, and each winner sees only its own share. With
+few players, a published total would reveal what individual crystals had spent.
 
 **Known weakness.** A player with several crystals can duel themselves to inflate their wins, and no on-chain
 ranking can rule that out entirely. That is acceptable in Season 0, where nothing has monetary value, and must be
@@ -145,7 +150,7 @@ in equal shares to every crystal that fought during the season.
 | Lobbies and stakes | Everyone |
 | Who won a duel | Everyone |
 | A crystal's record | Everyone |
-| The centre's total | Everyone, at the end of the season |
+| The centre's total | Nobody; each of the top three sees its own share |
 
 ## 10. Why the game needs encryption
 
@@ -181,4 +186,5 @@ Sanctuary, the Arena and the seasonal ranking, with simulated MANA and charges i
 | Maximum level | 10 |
 | Lobby timeout | 24 hours |
 | Season length | 3 days in Season 0, then 4 weeks |
+| Season close delay | 1 hour after the season ends |
 | Prize split | 50% / 30% / 20% |
