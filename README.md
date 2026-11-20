@@ -196,7 +196,7 @@ mid-mint, a reentrancy surface bought for nothing when the price is readable bef
 Requires **Node 24**, **pnpm 9**, and **Foundry**.
 
 ```bash
-pnpm install                                                    # install the workspace (contracts + client)
+pnpm install                                                    # install the workspace (contracts + client + garden)
 cp packages/contracts/.env.example packages/contracts/.env      # local deployer key; `.env` is gitignored
 pnpm dev                                                        # mprocs: anvil, contract deploy + watch, client, and the MUD explorer
 ```
@@ -210,8 +210,8 @@ there is no connect flow — but it starts with zero ETH, and minting costs real
 **“top up”** in the MUD Dev Tools panel (bottom right) before forging your first crystal.
 
 ```bash
-pnpm test        # 152 contract tests (deploys a World, then runs forge test) + client typecheck
-pnpm build       # contracts codegen + client production bundle
+pnpm test        # 152 contract tests (deploys a World, then runs forge test) + client typecheck + garden tests
+pnpm build       # contracts codegen + client production bundle + garden build
 ```
 
 ---

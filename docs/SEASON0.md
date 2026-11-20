@@ -199,8 +199,8 @@ Filled in by T02 and kept current.
 - **Solidity:** solc 0.8.24, EVM `cancun`; Foundry 1.7.1, pinned in CI.
 - **Contract packages:** `@fhevm/solidity` ^0.13.4 and `@openzeppelin/contracts` ^5.
 - **Test packages:** `@fhevm/forge` ^0.13.1 (tests inherit `TestFhevm`), `encrypted-types` ^0.0.4, and `forge-std`
-  remapped exactly as `forge-std/`. Follow the `@fhevm/forge` README for the installed version, and do not mix it
-  with the older standalone `forge-fhevm` template.
+  v1.11.0, the tag that README installs, remapped exactly as `forge-std/`. Follow the `@fhevm/forge` README for the
+  installed version, and do not mix it with the older standalone `forge-fhevm` template.
 - **Client:** `@zama-fhe/sdk` and `@zama-fhe/react-sdk` ^3.8.0. Never import `@fhevm/sdk` (the SDK's internal
   backend) or `@zama-fhe/relayer-sdk` (deprecated). Start from the official `react-wagmi` example at the
   installed version's tag.

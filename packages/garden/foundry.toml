@@ -1,0 +1,9 @@
+[profile.default]
+src = "src"
+test = "test"
+# Every dependency lives in node_modules and is reached through remappings.txt, so Forge has no lib/
+# folder to search.
+libs = []
+solc_version = "0.8.24"
+# The FHEVM contracts require cancun.
+evm_version = "cancun"
