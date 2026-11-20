@@ -48,9 +48,8 @@ bug fix.
 Whoever wants more weight in the world forges more crystals. The charge is held by the Monolith and recorded
 against the crystal.
 
-At birth, encrypted on-chain randomness gives the crystal its **element**: one of the three colours of the
-Monolith's white light, **Red (Fire)**, **Green (Earth)** or **Blue (Water)**, one chance in three each. Nobody
-chooses it, not even the forger. The crystal starts at **level 1** with **0 MANA**. Element,
+At birth, encrypted on-chain randomness gives the crystal its **element**: Fire, Water or Earth, one chance in
+three each. Nobody chooses it, not even the forger. The crystal starts at **level 1** with **0 MANA**. Element,
 level and MANA are encrypted from the first block, and only the owner can read them.
 
 **The element never changes.** It is the crystal's nature and its move in the Arena.
@@ -94,8 +93,7 @@ could have reached. Never the level it has.
 
 ## 7. The Arena: duels
 
-**The triangle.** Water beats Fire, Fire beats Earth, Earth beats Water. In colours: in the order Red, Green,
-Blue each colour beats the next, and Blue beats Red to close the circle.
+**The triangle.** Water beats Fire, Fire beats Earth, Earth beats Water.
 
 **The move is the crystal.** A player chooses which crystal to bring, and that crystal's element is the move.
 There is no other choice to make inside a duel.
