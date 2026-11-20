@@ -42,8 +42,25 @@ import { AtlantysmAccount } from "../src/accounts/AtlantysmAccount.sol";
  * that does not exist, with no migration path.
  *
  * So the dev defaults are available ONLY on the local anvil chain. Anywhere else this script
- * REVERTS unless `ERC6551_REGISTRY` and `ERC6551_ACCOUNT_IMPLEMENTATION` are supplied. Failing the
- * deploy is the cheap outcome; discovering the mistake after the first mint is the expensive one.
+ * REVERTS unless `ERC6551_REGISTRY` and `ERC6551_ACCOUNT_IMPLEMENTATION` are supplied — and unless
+ * both have code on the chain being deployed to. A non-zero address is not evidence of a contract:
+ * a typo, or an address copied from another network, would be frozen in exactly as permanently as
+ * a placeholder. Failing the deploy is the cheap outcome; discovering the mistake after the first
+ * mint is the expensive one.
+ *
+ * ---------------------------------------------------------------------------------------------
+ * THE SAME CHECK, MIRRORED, ON THE DEV CHAIN
+ * ---------------------------------------------------------------------------------------------
+ *
+ * One `.env` serves both Sepolia and local development, and `.env.example` ships with the canonical
+ * registry address filled in. That address has no code on a fresh anvil. Trusting it there used to
+ * wire a World in which EVERY mint reverted — `CrystalNFT._deployAccount` calls a registry that is
+ * not there — so a fresh clone that followed the documented setup got an unplayable `pnpm dev` and
+ * 16 failing tests.
+ *
+ * On the dev chain an identity input with no code is therefore treated as absent and replaced by a
+ * dev deployment. An input that DOES have code is kept, which is what makes an anvil fork of a real
+ * network behave like that network.
  *
  * ---------------------------------------------------------------------------------------------
  * RE-RUNNING
@@ -65,6 +82,10 @@ contract PostDeploy is Script {
   bytes32 internal constant ACCOUNT_SALT = bytes32(0);
 
   error PostDeploy_MissingIdentityConfig(uint256 chainId);
+
+  /// @notice An identity input was supplied but is not a contract on this chain. `variable` is the
+  /// environment variable it came from, so the message says which line of `.env` to look at.
+  error PostDeploy_IdentityInputHasNoCode(string variable, address value);
 
   function run(address worldAddress) external {
     // NOTE: no `StoreSwitch.setStoreAddress` and no direct table reads here, unlike the MUD
@@ -93,7 +114,13 @@ contract PostDeploy is Script {
       console.log("  CrystalNFT:", existingNft);
       console.log("  ManaToken: ", existingMana);
     } else {
-      (address registry, address implementation) = _resolveIdentityInputs();
+      // Read here and passed in, so `_resolveIdentityInputs` itself never touches the environment.
+      // `envOr` also falls back to the default for a variable that is set but empty, which is how
+      // `.env.example` ships `ERC6551_ACCOUNT_IMPLEMENTATION`.
+      (address registry, address implementation) = _resolveIdentityInputs(
+        vm.envOr("ERC6551_REGISTRY", address(0)),
+        vm.envOr("ERC6551_ACCOUNT_IMPLEMENTATION", address(0))
+      );
 
       CrystalNFT nft = new CrystalNFT(world);
       ManaToken manaToken = new ManaToken(world);
@@ -116,29 +143,56 @@ contract PostDeploy is Script {
   }
 
   /**
-   * @dev Environment first, dev defaults only on anvil, revert everywhere else.
+   * @dev Decides which ERC-6551 registry and account implementation get frozen into `ForgeConfig`.
+   *
+   *   off the dev chain   both must be supplied AND both must have code here, otherwise revert
+   *   on the dev chain    anything without code here is replaced by a fresh dev deployment
+   *
+   * The environment values arrive as ARGUMENTS rather than being read here. That is what lets the
+   * tests exercise every branch with explicit inputs: `vm.setEnv` is process-wide, so a test that
+   * set these variables would race every other test that runs the script.
    *
    * Deploys inside the caller's broadcast, so the dev contracts are real transactions rather than
    * script-local state.
    */
-  function _resolveIdentityInputs() internal returns (address registry, address implementation) {
-    registry = vm.envOr("ERC6551_REGISTRY", address(0));
-    implementation = vm.envOr("ERC6551_ACCOUNT_IMPLEMENTATION", address(0));
-
-    if (registry != address(0) && implementation != address(0)) {
+  function _resolveIdentityInputs(address registry, address implementation) internal returns (address, address) {
+    if (block.chainid != DEV_CHAIN_ID) {
+      // Deliberately fatal. See "the production guard" above.
+      if (registry == address(0) || implementation == address(0)) {
+        revert PostDeploy_MissingIdentityConfig(block.chainid);
+      }
+      if (registry.code.length == 0) {
+        revert PostDeploy_IdentityInputHasNoCode("ERC6551_REGISTRY", registry);
+      }
+      if (implementation.code.length == 0) {
+        revert PostDeploy_IdentityInputHasNoCode("ERC6551_ACCOUNT_IMPLEMENTATION", implementation);
+      }
       return (registry, implementation);
     }
 
-    if (block.chainid != DEV_CHAIN_ID) {
-      // Deliberately fatal. See "the production guard" above.
-      revert PostDeploy_MissingIdentityConfig(block.chainid);
+    // `address(0)` has no code either, so "unset" and "set to something that is not here" take the
+    // same path. Only the second is worth a line in the log.
+    if (registry.code.length == 0) {
+      if (registry != address(0)) {
+        console.log("ERC6551_REGISTRY has no code on this dev chain, deploying a dev registry instead of", registry);
+      }
+      registry = address(new DevERC6551Registry());
     }
 
-    if (registry == address(0)) registry = address(new DevERC6551Registry());
     // A REAL implementation since phase 9, not a placeholder: this is what lets a crystal act for
     // its owner. Deploying it here rather than only on dev chains would be wrong for the registry —
     // that one must be the canonical deployment — but the account implementation is ours to choose,
     // so the same contract is used everywhere and only the address differs.
-    if (implementation == address(0)) implementation = address(new AtlantysmAccount());
+    if (implementation.code.length == 0) {
+      if (implementation != address(0)) {
+        console.log(
+          "ERC6551_ACCOUNT_IMPLEMENTATION has no code on this dev chain, deploying a fresh one instead of",
+          implementation
+        );
+      }
+      implementation = address(new AtlantysmAccount());
+    }
+
+    return (registry, implementation);
   }
 }

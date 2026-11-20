@@ -63,6 +63,12 @@ this file, so one copy serves `mud deploy` and `forge script` alike.
 > clone has no `.env` at all** and `cp .env.example .env` is now required for local development
 > too, not just for Sepolia.
 
+> **One `.env` serves both, and the Sepolia values do not get in the way locally.** On anvil,
+> `PostDeploy` treats an identity input that has no code on the chain as unset and deploys a dev
+> registry / implementation in its place. Before that rule the pre-filled registry address was
+> trusted as-is on a fresh anvil, where nothing lives at it: the World deployed, every mint
+> reverted, and 16 tests failed.
+
 > **The registry address is not a guess.** It is the canonical ERC-6551 v0.3.1 registry, confirmed
 > deployed on Sepolia, and its function selectors match `src/accounts/IERC6551.sol` exactly
 > (`createAccount` `0x8a54c52f`, `account` `0x246a0021`). Use the canonical deployment and not a
@@ -128,6 +134,11 @@ save them, since the NFT address is what a wallet or explorer needs.
 
 **If it reverts with `PostDeploy_MissingIdentityConfig`:** one of the two identity variables is
 empty. That is the guard from step 1 doing its job, not a bug.
+
+**If it reverts with `PostDeploy_IdentityInputHasNoCode("ERC6551_…", 0x…)`:** the variable it names
+is set, but the address is not a contract on the chain you are deploying to — a typo, or step 3 was
+run against a different network. Same guard, one step further: an address with no code would
+otherwise be frozen in at the first mint just as permanently as a missing one.
 
 ---
 
@@ -249,6 +260,7 @@ Then: Forge → faucet → level up → arena.
 | Symptom | Cause |
 | --- | --- |
 | `PostDeploy_MissingIdentityConfig(11155111)` | `ERC6551_REGISTRY` or `ERC6551_ACCOUNT_IMPLEMENTATION` empty in `.env`. See step 1. |
+| `PostDeploy_IdentityInputHasNoCode("ERC6551_…", 0x…)` | The named variable points at an address with no code on the target chain. Check for a typo, and that step 3 deployed to the same network. |
 | `Missing PRIVATE_KEY environment variable` | `.env` not created, or you ran from outside `packages/contracts`. |
 | `pnpm deploy:local` hits Sepolia | `RPC_URL` is set in `.env` or your shell. It outranks the profile. See step 2. |
 | Vercel build: cannot resolve `contracts/abi/...` | `packages/contracts/abi/` was not committed. Run step 6. |

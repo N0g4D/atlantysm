@@ -1,0 +1,59 @@
+name: CI
+
+# Everything a fresh clone is told to do, in the order it is told to do it. If this is green, the
+# README's "Getting Started" works; if a change breaks the documented setup, this is where it shows.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: Build, contract tests, client typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v6
+
+      # No `version:` on purpose — it is read from `packageManager` in package.json, so CI and
+      # Vercel (corepack) cannot drift apart on the pnpm version.
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      # Pinned to the version deploy_instructions.md was verified against. `forge build` output and
+      # lint behaviour both move between Foundry releases; bump this deliberately, not by accident.
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.7.1
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # The documented local setup, verbatim. It deliberately keeps the Sepolia registry address
+      # that ships in .env.example: PostDeploy must cope with it on anvil (see phase8_deployment.md).
+      - name: Create the local .env exactly as the README says
+        run: cp packages/contracts/.env.example packages/contracts/.env
+
+      - name: Build contracts and client
+        run: pnpm build
+
+      # `abi/` and `src/codegen/` are committed derived state. A Solidity or mud.config change that
+      # was not followed by a rebuild-and-commit ships a client ABI that no longer matches the World.
+      - name: Committed ABIs and codegen match the source
+        run: git diff --exit-code -- packages/contracts/abi packages/contracts/src/codegen
+
+      - name: Test
+        run: pnpm test
