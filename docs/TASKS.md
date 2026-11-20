@@ -1,142 +1,90 @@
-# Atlantysm — backlog
+# Season 0 backlog
 
-The single list of what stands between the code-freeze MVP and a finished game. Phase reports under
-`docs/tasks/` record what was built and why; this file records what is left, in the order it should
-happen.
+> **Deadline:** the Zama Developer Program, Mainnet Season 5 (Confidential Gaming), closes on
+> **14 December 2026 at 23:59 AoE**. The submission needs the contract and the frontend, clear documentation, a
+> 3-minute video pitch by a real person, an X post, and a deployment on Sepolia.
+>
+> The game: [`RULES.md`](RULES.md). The design: [`SEASON0.md`](SEASON0.md). How to work: [`CLAUDE.md`](../CLAUDE.md).
 
-**How to use it.** One item is one branch and one pull request. The PR that closes an item ticks
-it here and adds the PR number. A decision that changes the plan goes in the log at the bottom, with
-its date, in the same PR that acts on it.
+Take the first unchecked task whose milestone has started. One task, one branch, one pull request, and the pull
+request ticks its task here.
 
-Legend: `[ ]` to do · `[~]` in review · `[x]` merged · **(owner)** needs the deployer key, Vercel or
-funds, so it cannot be done from a pull request.
+## Before starting (Alessio)
 
----
+- [ ] Merge #1 (CI and the local deploy fix), #3 (the rules), then this pull request.
+- [ ] Install Zama's skills in Claude Code, as described in `CLAUDE.md`.
+- [ ] Put at least 0.2 Sepolia ETH on the deployer wallet.
 
-## Where things stand — 2026-11-19
+## M0 — Foundations (by Sunday 22 November)
 
-- **Built:** the full loop of phases 1–13 — forge, faucet, ascension, arena, settlement — with 147
-  contract tests, and a React client that plays it end to end on a local chain.
-- **Deployed:** World `0x99b50Db22170c336998cc6D552Ea353B3f800207` on Sepolia since 2026-08-25
-  (block 11564183); client on Vercel.
-- **Never played live.** On this date the World holds 0 ETH and has received no transaction since
-  the deploy. Every mint leaves its price in the World, so no crystal has been forged on Sepolia:
-  the loop has been exercised locally only.
-- **Looks broken to a first visitor.** The client shows an empty state — `Prezzo: non configurato`,
-  forge disabled — until it has replayed every block since the deploy. See M1.
-- **Quiet since August.** No CI, no issues, no tags before this backlog.
+- [ ] **T01 · Scaffold `packages/garden`.** Foundry with `@fhevm/forge`, set up as its README describes. Add a smoke
+  test that encrypts an input, computes on it and decrypts the result, and a CI job (Node 24, Foundry 1.7.1)
+  that builds and tests the package.
+  *Done when* `pnpm --filter garden test` passes locally and in CI.
+- [ ] **T02 · Duel spike (gate).** A throwaway contract under `packages/garden/test/spike/` that implements *Join*
+  and *Publish* from `SEASON0.md` §2.2 for two crystals with given elements and levels. Test all nine element
+  pairs, mirrors with a higher, lower and equal level, the three forfeit cases, and a forged and a replayed proof.
+  Measure the HCU of joining.
+  *Done when* the tests pass and the pull request reports the HCU. If joining exceeds half of either cap, stop
+  and report before T03.
 
----
+## M1 — The Garden contract (by Sunday 29 November)
 
-## M0 — A base that can be trusted
+- [ ] **T03 · Crystals.** ERC-721, `forge`, `shatter` and MANA accrual.
+  *Done when* the tests cover `RULES.md` §4–5, ETH conservation, a stranger failing to decrypt, and the spread of
+  elements over 300 forges.
+- [ ] **T04 · The Sanctuary.** `attune` with the encrypted *rise* or *hold*, costs, the maximum level, and spent MANA
+  flowing into the season's pot.
+  *Done when* the tests cover `RULES.md` §6, including that a rise, a refused rise and a hold look the same from
+  outside.
+- [ ] **T05 · Lobbies and duels.** `openLobby`, `cancelLobby`, `joinLobby` and `publish`, built from the spike, with
+  locks and lifetime records.
+  *Done when* the tests cover `RULES.md` §7 and the adversarial cases in `SEASON0.md` §5.
+- [ ] **T06 · Seasons.** The season index from deployment, wins and losses per season, the top three with
+  tie-breaks, the close delay, `closeSeason` with encrypted shares, and the rollover.
+  *Done when* the tests cover `RULES.md` §8.
+- [ ] **T07 · Transfers.** The lock check, and sealing the crystal again for its new owner.
+  *Done when* a test shows that the previous owner cannot decrypt the new level and MANA.
+- [ ] **T08 · Hardening.** Check the rules in `SEASON0.md` §2.3 one by one in the pull request, check the contract
+  size, fill in the HCU table in §2.6, and have a subagent that has not seen the contract being written review it
+  against the invariants in `RULES.md` §3.
+  *Done when* every finding is fixed or recorded with a reason.
+- [ ] **T09 · Sepolia.** The deployment script, verification on Etherscan, and a scripted full round on Sepolia:
+  two crystals, an attunement, a lobby, a duel, its publication and a season closed. Use a deployment with a short
+  season for the round. Record the addresses and transaction hashes in `docs/season0-deployment.md`. Alessio
+  deploys, or gives the go-ahead.
 
-- [~] **Local deploy works with the documented `.env`.** `.env.example` pre-fills the canonical
-  ERC-6551 registry, which is empty on anvil; `PostDeploy` trusted it and every mint reverted
-  (16 of 147 tests failed on a fresh clone). — PR #1
-- [~] **CI on every push and PR**: frozen install, the documented `.env`, build, drift check on
-  committed ABIs and codegen, tests. — PR #1
-- [~] **This backlog, `CLAUDE.md` and a `LICENSE` file.** — PR #2
+## M2 — The app (by Sunday 6 December)
 
-## M1 — A live demo that works for a stranger
+- [ ] **T10 · Scaffold `packages/app`.** From the `react-wagmi` example of `@zama-fhe/react-sdk` at the installed
+  version, on Sepolia, with the Garden ABI taken from the build and Node 24.
+- [ ] **T11 · La Forgia.** Forging, the list of my crystals, and shattering. Decrypting my crystal on a click.
+- [ ] **T12 · Santuario.** Attuning with *rise* or *hold*, the pending states, and the values refreshed afterwards.
+- [ ] **T13 · L'Arena.** Open lobbies; opening, cancelling and joining; my duels; publishing pending results; the
+  results feed.
+- [ ] **T14 · Classifica and the Monolith.** The season ranking, its countdown, past seasons, and the close button
+  when a season is due. The home view with the state of the world.
+- [ ] **T15 · Vercel.** Configuration for `packages/app`, Node 24, the COOP and COEP headers checked against the
+  wallets, and the Garden address from the environment. Alessio points the Vercel project at the app.
 
-The acceptance test is a person who has never seen the project opening the link, and two of them
-finishing a match.
+## M3 — Identity, documentation, playtest (by Thursday 10 December)
 
-- [ ] **Show the sync, and gate the UI on it.** `syncToRecs` withholds every component update until
-  the initial sync reaches the chain head (`skipUpdateStream` until `SyncStep.LIVE`), so panels
-  render empty and say nothing. Read `components.SyncProgress`, show progress, and do not offer
-  actions before `live`.
-- [ ] **Tell "unknown" from "not configured".** `useMintPrice` returns `undefined` both while
-  syncing and when the price really is unset, and the forge prints `non configurato` for both.
-- [ ] **Bound the replay.** The client replays every `Store_*` log from the deploy block, 1,000
-  blocks per request. Sepolia adds about 7,200 blocks a day: roughly 620 sequential requests today
-  and seven more each day, against a rate-limited public endpoint. `fetchLogs` retries a throttled
-  request three times and then gives up, which leaves the page empty for good. Options, to be
-  decided:
-  1. a MUD indexer (`indexerUrl`) — MUD's chain configs carry one for Garnet, Pyrope and Redstone,
-     none for Sepolia;
-  2. a snapshot of the Store logs shipped with the client (`initialBlockLogs`) and refreshed by a
-     scheduled job, which keeps the "no backend" property;
-  3. redeploying resets the start block, but only postpones the problem.
-- [ ] **A failure state.** `setup()` is awaited before React mounts and nothing catches a throw:
-  a dead RPC is a blank page. Add an error boundary and a readable message.
-- [ ] **Fix the funding hint on Sepolia.** With zero ETH the forge says to use "top up" in the MUD
-  Dev Tools, which are only mounted in development builds. In production say how to fund the
-  burner instead.
-- [ ] **Dedicated RPC on Vercel** — `VITE_SEPOLIA_RPC_HTTP`. Check the provider's `eth_getLogs`
-  block-range limit first: some free tiers cap a request at a handful of blocks, which would make
-  the replay far worse, not better. **(owner)**
-- [ ] **Play one full match on Sepolia** with two funded wallets — mint, faucet, level up, create,
-  join, reveal, resolve — and record the transaction hashes here. **(owner, with support)**
+- [ ] **T16 · Visual identity.** Derived from the banner (the white garden, the monolith, the small white tables)
+  and the RGB triad; Italian copy; desktop and mobile. Apply the direction Alessio approves.
+- [ ] **T17 · Keeper.** A Node script using `@zama-fhe/sdk/node` that publishes pending duels and closes seasons
+  that are due. Run by hand or on a schedule.
+- [ ] **T18 · Documentation for the judges.** A Season 0 section in the README: what is secret and why the game
+  needs FHE (`RULES.md` §10), how to play, the verified contract addresses, and how to run the tests. Add an
+  outline for the 3-minute video.
+- [ ] **T19 · Playtest.** At least three real players on Sepolia for a whole season. Issues fixed or recorded.
 
-## M2 — The open points ratified at code freeze
+## Submission (Alessio, 11–14 December)
 
-- [ ] **Commit secrets that survive a cleared browser.** Derive the salt from the wallet key and
-  the public match data instead of drawing it at random; `localStorage` becomes a cache. A lost
-  move is then recoverable too: with the salt known there are only three candidates to hash
-  against the on-chain commitment.
-- [ ] **Client tests** (vitest). First target is `lib/commit.ts`: the two encodings are the part
-  that fails silently, so pin them against vectors produced by the contract itself.
-- [ ] **Loading and error boundary** — delivered by M1.
+- [ ] Record the 3-minute video. It must show a real person: AI-generated video or voice is not accepted.
+- [ ] Publish the X post introducing the project.
+- [ ] Submit the form before 14 December at 23:59 AoE.
 
-## M3 — Rules and contracts
+## After Season 0
 
-The Sepolia World holds no player state, so until someone mints, even a table schema change costs
-a fresh World and nothing else. Once players hold crystals a fresh World would erase them, and new
-fields have to arrive as new tables.
-
-- [ ] **Combat rule. — decision pending.** Today damage is `level`, doubled with the elemental
-  advantage, and the challenger's level is public: a crystal at twice the level can never lose, and
-  the joiner is the one who picks the match. Candidates:
-  - *the advantage wins ties* — fixes 2 v 1, leaves 3 v 1 a certain win;
-  - *×3 with that tie-break* — moves the certain win to "more than three times the level";
-  - *the element always decides, level breaks same-element ties* — no gap is ever a certain win,
-    nothing changes between close levels, and it is what the Arena panel already tells players.
-    **Recommended.**
-- [ ] **Optional level cap on a lobby**, set by the challenger. Even without certain wins the
-  higher level keeps a 2-in-3 edge, and only the joiner chooses. Needs a new field on a fresh
-  World, or a new table on a live one.
-- [ ] **Transfer lock during a match** — `ArenaSystem` note 6, phase 9 open point 2.
-- [ ] **`tokenURI`** projecting `CrystalData` — phase 7 open point 2.
-- [ ] **ERC-1271 tests** for `isValidSignature` — phase 9 open point 5.
-- [ ] **Invariant tests** on the derived counters `CrystalBalance` and `ManaSupply` — phase 7 open
-  point 4.
-- [ ] **Gas benchmark of a mint** — phase 9 open point 4.
-
-## M4 — Visual redesign
-
-- [ ] **Art direction first**: two or three directions for the main screen as mockups, chosen
-  before any client code changes.
-- [ ] **Design system**, then the screens: forge, sanctuary, arena, the crystal itself, element
-  iconography, the sync / empty / error states from M1, and a phone layout.
-- [ ] **Confirm the rights to `docs/assets/banner.jpg`**, or replace it with original art. The
-  redesign should not be built on an image the project may not own.
-
-## M5 — A real launch (only if wanted)
-
-- [ ] Real wallets instead of a burner key in `localStorage`.
-- [ ] Economy calibration: `MintPrice`, `STARTER_MANA` and the level ladder are still placeholders
-  with no stated relationship — phase 6 open points 1, 3 and 4.
-- [ ] Namespace owner on a multisig; it can replace the facades, and the NFT facade is the mint
-  authorisation.
-- [ ] External review of the contracts.
-- [ ] Target chain, and with it the indexer question from M1.
-
-## M6 — V2
-
-- [ ] Crysm integration — see the roadmap in the README.
-
-## Maintenance
-
-- [ ] Node 20 reached end of life in April 2026 and the workspace still pins it (`engines`,
-  `.nvmrc`, Vercel). Plan the move together with pnpm and Vite.
-- [ ] `agent/skills/` and `.agents/skills/` carry two diverging copies of the same Tavily skills.
-- [ ] `lib/commit.ts` points at `b.txt`, a phase report that is gitignored; `usePrimaryCrystal` is
-  unused since the crystal selector landed.
-
----
-
-## Decision log
-
-- **2026-11-19** — Development resumes from this backlog, in milestone order. The combat rule and
-  the art direction are the two decisions still open.
+See `SEASON0.md` §7: the staking Monolith, crossing to a successor contract, the ranking fix, an audit and a legal
+review.
