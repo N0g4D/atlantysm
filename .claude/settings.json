@@ -1,0 +1,13 @@
+{
+  "extraKnownMarketplaces": {
+    "zama-skills": {
+      "source": {
+        "source": "github",
+        "repo": "zama-ai/skills"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "zama-protocol@zama-skills": true
+  }
+}

@@ -35,7 +35,7 @@ Per crystal (`tokenId`):
 
 | Field | Type | Who can read it |
 |---|---|---|
-| `element` | `euint8`: 0 = Red (Fire), 1 = Green (Earth), 2 = Blue (Water) | The owner, and past owners |
+| `element` | `euint8`: 0 = Fire, 1 = Earth, 2 = Water | The owner, and past owners |
 | `level` | `euint8`, from 1 to `MAX_LEVEL` | The owner |
 | `mana` | `euint64`, whole MANA | The owner |
 | `lastAccrual` | `uint64` timestamp | Everyone |
@@ -103,7 +103,7 @@ then unlock the crystal.
 paidB   = ge(manaB, stake)
 manaB   = sub(manaB, select(paidB, stake, 0))
 same    = eq(eA, eB)
-aBeatsB = eq(eB, rem(add(eA, 1), 3))              // Red > Green > Blue > Red
+aBeatsB = eq(eB, rem(add(eA, 1), 3))              // Fire > Earth > Water > Fire
 coin    = randEbool()                             // drawn every time: nothing branches on the inputs
 mirror  = select(eq(lA, lB), coin, gt(lA, lB))
 normal  = select(same, mirror, aBeatsB)
@@ -172,8 +172,8 @@ accounts (not a mint or a burn), seal the crystal again for the new owner: `leve
 `forge()`, `shatter(tokenId)`, `attune(tokenId, rise, proof)`, `openLobby(tokenId, stake)`, `cancelLobby(lobbyId)`,
 `joinLobby(lobbyId, tokenId)`, `publish(duelId, creatorWon, proof)`, `closeSeason(season)`. Views return a crystal's
 public fields and its handles (so the owner can request decryption), open lobbies and pending duels with
-pagination, the current season, and a season's ranking. Names can be refined in T03 to T06; changes are recorded
-here.
+pagination, the current season, and a season's ranking. Until the Sepolia deployment (T09), names and views may be
+refined, and every change is recorded here. After it, changing the API means a new deployment: stop and ask.
 
 ### 2.5 Events
 
@@ -204,9 +204,10 @@ Filled in by T02 and kept current.
 - **Client:** `@zama-fhe/sdk` and `@zama-fhe/react-sdk` ^3.8.0. Never import `@fhevm/sdk` (the SDK's internal
   backend) or `@zama-fhe/relayer-sdk` (deprecated). Start from the official `react-wagmi` example at the
   installed version's tag.
-- **Runtime:** Node 24 for the new packages (Vercel no longer builds on Node 20), pnpm 9 from `packageManager`.
+- **Runtime:** Node 24 for the whole workspace from T01 (Node 20 reached end of life in April 2026), pnpm 9 from
+  `packageManager`. CI and Vercel take the version from `.nvmrc` and the root `engines`.
 - **Relayer:** the Sepolia relayer is open and needs no API key. Mainnet needs one; that is a later problem.
-- **Reference:** Zama's agent skills (`zama-ai/skills`), installed as described in `CLAUDE.md`.
+- **Reference:** Zama's agent skills (`zama-ai/skills`), enabled for the repository in `.claude/settings.json`.
 
 ## 4. Client
 
@@ -222,7 +223,6 @@ Filled in by T02 and kept current.
 - **Reads** go through view functions. There is no indexer in Season 0.
 - **Headers.** Vercel serves the app with the COOP and COEP headers that let the FHE backend run multithreaded.
   Check that the wallet connectors still work with them before keeping them.
-- **Colours.** Elements are always drawn in their colours: Red, Green, Blue.
 
 ## 5. Tests
 

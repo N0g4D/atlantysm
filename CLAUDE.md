@@ -16,8 +16,9 @@ and change it only to keep CI green.
 
 ## FHEVM knowledge
 
-Install Zama's skills once, and load them before any FHE work: `zama-protocol` first, then `zama-solidity` for
-contracts or `zama-typescript` for the client.
+`.claude/settings.json` adds Zama's plugin marketplace and enables its `zama-protocol` plugin, which carries three
+skills. Load them before any FHE work: `zama-protocol` first, then `zama-solidity` for contracts or
+`zama-typescript` for the client. If they are missing, install the plugin by hand:
 
 ```
 /plugin marketplace add zama-ai/skills
@@ -30,7 +31,7 @@ and memory is not a source.
 
 ## Commands
 
-Node 24 for `packages/garden` and `packages/app`, pnpm 9, Foundry 1.7.1. The scripts appear with T01 and T10.
+Node 24 (T01 moves the workspace off Node 20), pnpm 9, Foundry 1.7.1. The scripts appear with T01 and T10.
 
 ```bash
 pnpm install
@@ -52,7 +53,8 @@ pnpm --filter app build
   diff against `RULES.md` §3 and `SEASON0.md` §2.3, and fix what it finds.
 - **Report HCU.** A change to encrypted logic reports the HCU of every function it touched and updates
   `SEASON0.md` §2.6.
-- **Stop and ask** when a task would change a rule, an invariant or the public API, or when a gate fails.
+- **Stop and ask** when a task would change a rule, an invariant or the deployed API (`SEASON0.md` §2.4), or when a
+  gate fails.
 - **Never deploy, broadcast or handle a private key.** Deploys, Vercel settings and funding wallets belong to
   Alessio. `.env` files are never committed.
 - **Languages.** UI copy is Italian. Code, comments, docs, commits and pull requests are English. Commits follow

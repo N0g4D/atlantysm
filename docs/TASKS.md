@@ -12,15 +12,17 @@ request ticks its task here.
 ## Before starting (Alessio)
 
 - [ ] Merge #1 (CI and the local deploy fix), #3 (the rules), then this pull request.
-- [ ] Install Zama's skills in Claude Code, as described in `CLAUDE.md`.
+- [ ] Open the repository in Claude Code and accept Zama's plugin marketplace when asked (see `CLAUDE.md`).
 - [ ] Put at least 0.2 Sepolia ETH on the deployer wallet.
 
 ## M0 — Foundations (by Sunday 22 November)
 
-- [ ] **T01 · Scaffold `packages/garden`.** Foundry with `@fhevm/forge`, set up as its README describes. Add a smoke
-  test that encrypts an input, computes on it and decrypts the result, and a CI job (Node 24, Foundry 1.7.1)
-  that builds and tests the package.
-  *Done when* `pnpm --filter garden test` passes locally and in CI.
+- [ ] **T01 · Node 24 and `packages/garden`.** First move the workspace to Node 24: `.nvmrc` and the root `engines`
+  still say 20, and CI and Vercel follow them. The MUD MVP must keep building and passing its tests on Node 24; if
+  it cannot, stop and report. Then scaffold `packages/garden`: Foundry with `@fhevm/forge`, set up as its README
+  describes, and a smoke test that encrypts an input, computes on it and decrypts the result. The root `build` and
+  `test` scripts run every package, so the existing CI job covers the new one.
+  *Done when* `pnpm --filter garden test` passes locally and in CI, and the MVP's checks stay green.
 - [ ] **T02 · Duel spike (gate).** A throwaway contract under `packages/garden/test/spike/` that implements *Join*
   and *Publish* from `SEASON0.md` §2.2 for two crystals with given elements and levels. Test all nine element
   pairs, mirrors with a higher, lower and equal level, the three forfeit cases, and a forged and a replayed proof.
@@ -57,20 +59,22 @@ request ticks its task here.
 ## M2 — The app (by Sunday 6 December)
 
 - [ ] **T10 · Scaffold `packages/app`.** From the `react-wagmi` example of `@zama-fhe/react-sdk` at the installed
-  version, on Sepolia, with the Garden ABI taken from the build and Node 24.
-- [ ] **T11 · La Forgia.** Forging, the list of my crystals, and shattering. Decrypting my crystal on a click.
-- [ ] **T12 · Santuario.** Attuning with *rise* or *hold*, the pending states, and the values refreshed afterwards.
-- [ ] **T13 · L'Arena.** Open lobbies; opening, cancelling and joining; my duels; publishing pending results; the
+  version, on Sepolia, with the Garden ABI taken from the build.
+- [ ] **T11 · Visual identity.** Before any page is built: a direction derived from the banner (the white garden, the
+  monolith, the small white tables) and the three elements. Palette, type, how a crystal and the Monolith look, on
+  desktop and mobile, shown on the Monolith home view with Italian copy.
+  *Done when* Alessio approves the direction. Every page after follows it.
+- [ ] **T12 · La Forgia.** Forging, the list of my crystals, and shattering. Decrypting my crystal on a click.
+- [ ] **T13 · Santuario.** Attuning with *rise* or *hold*, the pending states, and the values refreshed afterwards.
+- [ ] **T14 · L'Arena.** Open lobbies; opening, cancelling and joining; my duels; publishing pending results; the
   results feed.
-- [ ] **T14 · Classifica and the Monolith.** The season ranking, its countdown, past seasons, and the close button
-  when a season is due. The home view with the state of the world.
-- [ ] **T15 · Vercel.** Configuration for `packages/app`, Node 24, the COOP and COEP headers checked against the
-  wallets, and the Garden address from the environment. Alessio points the Vercel project at the app.
+- [ ] **T15 · Classifica and the Monolith.** The season ranking, its countdown, past seasons, and the close button
+  when a season is due. The home view filled with the state of the world.
+- [ ] **T16 · Vercel.** Configuration for `packages/app`, the COOP and COEP headers checked against the wallets, and
+  the Garden address from the environment. Alessio points the Vercel project at the app.
 
-## M3 — Identity, documentation, playtest (by Thursday 10 December)
+## M3 — Keeper, documentation, playtest (by Thursday 10 December)
 
-- [ ] **T16 · Visual identity.** Derived from the banner (the white garden, the monolith, the small white tables)
-  and the RGB triad; Italian copy; desktop and mobile. Apply the direction Alessio approves.
 - [ ] **T17 · Keeper.** A Node script using `@zama-fhe/sdk/node` that publishes pending duels and closes seasons
   that are due. Run by hand or on a schedule.
 - [ ] **T18 · Documentation for the judges.** A Season 0 section in the README: what is secret and why the game
