@@ -46,9 +46,11 @@ Per crystal (`tokenId`):
 - **Per duel:** both crystals, the stake, its season, `creatorWins` (`ebool`, publicly decryptable) and a
   `published` flag.
 - **Per season:** `pot` (`euint64`), wins and losses per crystal, the id of each crystal's latest counted win, the
-  top three and a `closed` flag.
+  top three and a `closed` flag. Seasons are numbered from 1, and season 1 starts at the deployment.
 
-The contract's ETH balance always equals `CHARGE × live crystals`.
+The contract's ETH balance always equals `CHARGE × live crystals`. `forge` is the only way in: `Garden` has no
+`receive` or `fallback`. Only ETH forced in by another contract's `selfdestruct` could sit on top, and nothing would
+ever move it.
 
 ### 2.2 Encrypted logic (normative)
 
@@ -72,6 +74,12 @@ element = asEuint8(rem(randEuint16(), 3))        // 65,536 mod 3 = 1: a bias of 
 level   = asEuint8(1)                             // public facts: every crystal starts at level 1
 mana    = asEuint64(0)                            // ... and with no MANA
 ```
+
+The protocol derives a handle from its operation, its operands and the block, not from the contract or the caller.
+Crystals forged in the same block therefore share their level and MANA handles, and each owner can decrypt the
+other's. Both values are public facts, so this reveals nothing. In general two crystals share a handle only when its
+value follows from public data. A crystal's handles become its own at its first operation on a secret, an
+attunement or a duel.
 
 **Attune** `(tokenId, externalEbool rise, bytes proof)` — owner only.
 
@@ -152,7 +160,9 @@ current season's pot, burn the token, and send `CHARGE` to the owner last.
 **Transfer** — the ERC-721 `_update` hook. Revert if the crystal is waiting in a lobby. On a transfer between two
 accounts (not a mint or a burn), seal the crystal again for the new owner: `level = add(level, 0)` and
 `mana = add(mana, 0)` produce new handles; call `allowThis` and `allow(newOwner)` on both, and `allow(newOwner)` on
-`element`. A test must show that the previous owner cannot decrypt the new handles.
+`element`. A test must show that the previous owner cannot decrypt the new handles. Until T07 builds this, `_update`
+refuses every transfer between accounts. Without the reseal, the previous owner would keep reading the level and
+MANA, and the new owner could not read them.
 
 ### 2.3 Rules for every change
 
@@ -176,11 +186,29 @@ public fields and its handles (so the owner can request decryption), open lobbie
 pagination, the current season, and a season's ranking. Until the Sepolia deployment (T09), names and views may be
 refined, and every change is recorded here. After it, changing the API means a new deployment: stop and ask.
 
+Refined so far:
+
+- **T03.**
+  - **Construction.** The constructor takes one `Params` struct, and each later task adds its parameters to it. They
+    are readable as `CHARGE`, `MANA_PER_DAY`, `SECONDS_PER_MANA` and `SEASON_LENGTH`, and `GENESIS` is the deployment
+    time.
+  - **The token.** It is named "Atlantysm Crystal", with the symbol `CRYSTAL`. `forge()` returns the new token id.
+    Ids start at 1 and are never reused.
+  - **Views.**
+    - `crystalOf(tokenId)` returns the owner, the three handles, `lastAccrual` and `pendingMana`, the MANA accrued
+      since `lastAccrual` and not yet credited. The balance as of now is the decrypted `mana` plus `pendingMana`.
+    - `crystalsOf(owner, cursor, count)` returns an owner's crystals among `count` ids from `cursor`, and the next
+      cursor (0 at the end), so the app can list a player's crystals without an indexer.
+    - `totalSupply()` is the number of live crystals, and `lastTokenId()` the id of the latest one forged.
+    - `currentSeason()`.
+    - `potOf(season)` is the handle of a season's pot, which nobody can decrypt.
+
 ### 2.5 Events
 
 `Forged(tokenId, owner)`, `Shattered(tokenId)`, `Attuned(tokenId)`, `LobbyOpened(lobbyId, tokenId, stake)`,
 `LobbyCancelled(lobbyId)`, `DuelFought(duelId, lobbyId, creatorCrystal, challengerCrystal, season)`,
-`DuelPublished(duelId, winner, loser)`, `SeasonClosed(season, first, second, third)`.
+`DuelPublished(duelId, winner, loser)`, `SeasonClosed(season, first, second, third)`. `Forged` indexes the token id
+and the owner, and `Shattered` the token id, so the app can filter them.
 
 ### 2.6 HCU budget
 
@@ -190,12 +218,20 @@ grants survive; `setUp` runs as a transaction of its own, like an earlier transa
 
 | Function | HCU per transaction | Depth |
 |---|---|---|
-| `forge` | | |
+| `forge` | 603,096 | 603,032 |
+| `shatter` | 295,032 | 295,000 |
 | `attune` | | |
 | `openLobby` | 466,064 | 466,000 |
 | `joinLobby` | 2,259,064 | 906,000 |
 | `closeSeason` | | |
 | transfer | | |
+
+`forge` and `shatter` are measured on `Garden` (`packages/garden/test/Hcu.t.sol`).
+- **`forge`.** Nearly all of it is the element: `randEuint16` costs 23,000, the scalar `rem` on `euint16` 580,000,
+  and the cast to `euint8` 32. The two trivial encryptions add 32 each.
+- **`shatter`.** It makes two additions in a chain: the accrual's scalar `add` (133,000), then the `add` into the pot
+  (162,000). The measured call is a season's first contribution, which costs the most: `FHE.add` first encrypts a 0
+  for the empty pot, which adds 32.
 
 `openLobby` and `joinLobby` were measured on the T02 spike (`packages/garden/test/spike/`); T05 measures them again
 on `Garden`. In `joinLobby` the triangle's scalar `rem` is the most expensive operation, 440,000 HCU, and it lies on
