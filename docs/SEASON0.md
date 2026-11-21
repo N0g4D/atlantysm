@@ -144,7 +144,8 @@ pot[currentSeason] = add(pot[currentSeason], rest)
 
 The shares of missing or shattered crystals stay in `rest`. It goes to the season in progress, which cannot be
 closed yet, rather than to `season + 1`, which may already be closed if this call comes late. The pot is never
-decrypted.
+decrypted. Each winner can still work out the pot from its own share, because the split is fixed; `RULES.md` §8
+accepts this.
 
 **Shatter** `(tokenId)` — owner only, the crystal not waiting in a lobby. Accrue, add the crystal's MANA to the
 current season's pot, burn the token, and send `CHARGE` to the owner last.

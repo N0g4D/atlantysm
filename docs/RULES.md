@@ -50,7 +50,9 @@ against the crystal.
 
 At birth, encrypted on-chain randomness gives the crystal its **element**: Fire, Water or Earth, one chance in
 three each. Nobody chooses it, not even the forger. The crystal starts at **level 1** with **0 MANA**. Element,
-level and MANA are encrypted from the first block, and only the owner can read them.
+level and MANA are encrypted from the first block, and only the owner can read them. A forger who wants another
+element can shatter the crystal and forge a new one, paying only gas: the draw starts again, and the new crystal is
+born like any other.
 
 **The element never changes.** It is the crystal's nature and its move in the Arena.
 
@@ -131,10 +133,10 @@ published. A season can
 be closed **1 hour** after it ends *(parameter)*; results published later count only in the crystals' records.
 
 **The prize.** When a season is closed, the centre is credited to the top three crystals in encrypted shares:
-**50%, 30% and 20%** *(parameter)*. Its total is never published, and each winner sees only its own share. With
-few players, a published total would reveal what individual crystals had spent. A share with no crystal to take
-it, because fewer than three were ranked or one has been shattered, stays in the centre for the season in
-progress.
+**50%, 30% and 20%** *(parameter)*. Its total is never published: with few players, it would reveal what
+individual crystals had spent. Each winner sees only its own share, and since the split is fixed, it can work out
+the total from that share once the season is closed; nobody else can. A share with no crystal to take it, because
+fewer than three were ranked or one has been shattered, stays in the centre for the season in progress.
 
 **Known weakness.** A player with several crystals can duel themselves to inflate their wins, and no on-chain
 ranking can rule that out entirely. That is acceptable in Season 0, where nothing has monetary value, and must be
@@ -153,7 +155,7 @@ in equal shares to every crystal that fought during the season.
 | Lobbies and stakes | Everyone |
 | Who won a duel | Everyone |
 | A crystal's record | Everyone |
-| The centre's total | Nobody; each of the top three sees its own share |
+| The centre's total | Nobody; once the season closes, each of the top three can work it out from its own share |
 
 ## 10. Why the game needs encryption
 
