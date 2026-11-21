@@ -169,6 +169,9 @@ importers:
       '@fhevm/solidity':
         specifier: ^0.13.4
         version: 0.13.4
+      '@openzeppelin/contracts':
+        specifier: ^5
+        version: 5.6.1
       encrypted-types:
         specifier: ^0.0.4
         version: 0.0.4
