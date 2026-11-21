@@ -85,6 +85,17 @@ contract CrystalsTest is GardenFixture {
         assertEq(garden.totalSupply(), 0);
     }
 
+    /// SEASON0.md §2.1: `forge` is the only way in for ETH. Garden has no `receive` and no `fallback`.
+    function testGardenRefusesAnyOtherEth() public {
+        vm.startPrank(alice);
+        (bool plain,) = address(garden).call{value: CHARGE}("");
+        (bool unknown,) = address(garden).call{value: CHARGE}(abi.encodeWithSignature("deposit()"));
+        vm.stopPrank();
+        assertFalse(plain, "a plain transfer");
+        assertFalse(unknown, "a call to no function");
+        assertEq(address(garden).balance, 0);
+    }
+
     /// RULES.md §3, invariant 2, and §4: every crystal is born equal, at level 1 with no MANA, whoever forges it
     /// and whenever. The forger can read all three secrets from the start.
     function testEveryCrystalIsBornEqual() public {
@@ -282,6 +293,10 @@ contract CrystalsTest is GardenFixture {
         _assertPage(alice, 0, 2, _ids(1, 2), 3);
         _assertPage(alice, 8, 3, new uint256[](0), 0);
         _assertPage(alice, 2, 0, new uint256[](0), 2);
+
+        // Shattered crystals belong to the zero address, which owns nothing, as for `balanceOf`.
+        vm.expectRevert(abi.encodeWithSelector(IERC721Errors.ERC721InvalidOwner.selector, address(0)));
+        garden.crystalsOf(address(0), 1, 100);
     }
 
     // -- Deployment -----------------------------------------------------------------------------------------

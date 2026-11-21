@@ -117,10 +117,13 @@ contract ManaTest is GardenFixture {
     }
 
     /// RULES.md §5: a crystal's balance is encrypted. The credited balance is granted to the contract and the
-    /// owner, and to nobody else.
+    /// owner, and to nobody else. Not even to a player whose crystal was forged and credited in the same blocks, and
+    /// holds the same MANA.
     function testOnlyTheOwnerCanReadTheBalance() public {
         uint256 tokenId = _forge(alice);
+        uint256 bobCrystal = _forge(bob);
         _wait(1 days);
+        harness.act(bobCrystal);
 
         vm.recordLogs();
         harness.act(tokenId);
@@ -134,8 +137,19 @@ contract ManaTest is GardenFixture {
         _assertNothingPublic(logs);
 
         assertEq(decrypt(mana, address(garden), aliceKey), MANA_PER_DAY);
+        assertEq(decrypt(garden.crystalOf(bobCrystal).mana, address(garden), bobKey), MANA_PER_DAY);
+        _assertCannotDecrypt(mana, bob, bobKey);
         _assertCannotDecrypt(mana, stranger, strangerKey);
         _assertNotPublic(mana);
+    }
+
+    /// Accrual stores the credit as it makes it, so a call that accrues twice, or reads the balance after accruing,
+    /// still finds it.
+    function testAccruingTwiceInOneCallKeepsTheCredit() public {
+        uint256 tokenId = _forge(alice);
+        _wait(1 days);
+        harness.actTwice(tokenId);
+        assertEq(decrypt(garden.crystalOf(tokenId).mana, address(garden), aliceKey), MANA_PER_DAY);
     }
 
     // -- The centre -----------------------------------------------------------------------------------------

@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {FhevmHCUMeter} from "@fhevm/forge/FhevmVm.sol";
+import {Garden} from "../src/Garden.sol";
 import {GardenFixture} from "./utils/GardenFixture.sol";
 
 /**
@@ -32,11 +33,19 @@ contract HcuTest is GardenFixture {
         _assertWithinBudget("forge", lastHCU());
     }
 
-    /// The season's pot is still empty here, so `FHE.add` first encrypts a 0 for it: the costliest shatter.
+    /// The season's pot is still empty here, so it starts from GARDEN_ZERO. A later shatter adds to the pot instead,
+    /// at the same cost.
     function testShatteringStaysUnderHalfOfEachCap() public {
         resetHCU();
         _shatter(alice, crystal);
         _assertWithinBudget("shatter", lastHCU());
+    }
+
+    /// Not an external function, but a transaction with FHE work: the constructor draws GARDEN_ZERO.
+    function testDeployingStaysUnderHalfOfEachCap() public {
+        resetHCU();
+        new Garden(_seasonZero());
+        _assertWithinBudget("deployment", lastHCU());
     }
 
     function _assertWithinBudget(string memory name, FhevmHCUMeter memory hcu) internal {

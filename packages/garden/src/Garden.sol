@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {FHE, euint8, euint64} from "@fhevm/solidity/lib/FHE.sol";
+import {FHE, euint8, euint16, euint64} from "@fhevm/solidity/lib/FHE.sol";
 import {ZamaEthereumConfig} from "@fhevm/solidity/config/ZamaConfig.sol";
 import {ERC721} from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
@@ -12,6 +12,11 @@ import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/Reentrancy
  *         its owner can read.
  * @dev One contract holds every encrypted value, and nobody can change it (docs/SEASON0.md §2): no owner, no admin,
  *      no proxy, no pause, no setter. A fix is a new deployment. Every rule parameter is fixed at construction.
+ *
+ *      The protocol derives a handle from its operation, its operands and the block, so whoever is allowed on every
+ *      operand of an operation can recompute its result in that block and grant it to anyone, and anyone can
+ *      recompute a trivial encryption. No handle this contract stores can be recomputed by anyone but itself and the
+ *      crystal's owner (SEASON0.md §2.2, Handles).
  */
 contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
     /// The parameters of RULES.md §12, fixed at deployment.
@@ -51,6 +56,9 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
     uint256 public immutable SEASON_LENGTH;
     /// The deployment time, when season 1 starts.
     uint256 public immutable GENESIS;
+    /// An encrypted zero that only this contract holds, drawn at construction. A value that must be unreachable starts
+    /// from it rather than from an encrypted plaintext 0, which anyone can reproduce.
+    euint64 internal immutable GARDEN_ZERO;
 
     /// Live crystals: forged and not shattered.
     uint256 public totalSupply;
@@ -80,6 +88,8 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
         SECONDS_PER_MANA = uint64(1 days / params.manaPerDay);
         SEASON_LENGTH = params.seasonLength;
         GENESIS = block.timestamp;
+        // Zero, whatever the draw. Nobody else is ever allowed on the draw, so nobody else can reproduce the handle.
+        GARDEN_ZERO = FHE.allowThis(FHE.and(FHE.randEuint64(), 0));
     }
 
     // -- Crystals (RULES.md §4) --------------------------------------------------------------------------------
@@ -93,13 +103,17 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
         _mint(msg.sender, tokenId);
 
         Crystal storage crystal = _crystals[tokenId];
+        euint16 draw = FHE.randEuint16();
         // One chance in three each, from encrypted on-chain randomness. 65,536 mod 3 = 1, so Fire (0) has one more
         // draw than Earth or Water out of 65,536.
-        crystal.element = _seal(FHE.asEuint8(FHE.rem(FHE.randEuint16(), 3)), msg.sender);
-        // Every crystal starts at level 1 with no MANA. Both are public facts, so encrypting them from plaintext
-        // reveals nothing (SEASON0.md §2.3, rule 3).
-        crystal.level = _seal(FHE.asEuint8(1), msg.sender);
-        crystal.mana = _seal(FHE.asEuint64(0), msg.sender);
+        crystal.element = _seal(FHE.asEuint8(FHE.rem(draw, 3)), msg.sender);
+        // Level 1 and no MANA are public facts, but `asEuint8(1)` and `asEuint64(0)` would give every crystal forged
+        // in this block the same two handles, which any contract could also make and grant to anyone. Computed from
+        // the draw, which only this contract ever holds, they belong to this crystal alone. The zero runs beside the
+        // element's `rem`, so it adds nothing to the depth.
+        euint16 zero = FHE.and(draw, 0);
+        crystal.level = _seal(FHE.asEuint8(FHE.or(zero, 1)), msg.sender);
+        crystal.mana = _seal(FHE.asEuint64(zero), msg.sender);
         crystal.lastAccrual = uint64(block.timestamp);
         emit Forged(tokenId, msg.sender);
     }
@@ -114,7 +128,7 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
 
         // The MANA accrued so far goes with the rest (SEASON0.md §2.2), into the pot of the season in progress.
         uint256 season = currentSeason();
-        _pots[season] = FHE.allowThis(FHE.add(_pots[season], _accrue(_crystals[tokenId])));
+        _pots[season] = FHE.allowThis(FHE.add(_potOf(season), _accrue(_crystals[tokenId])));
 
         delete _crystals[tokenId];
         --totalSupply;
@@ -152,6 +166,8 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
         view
         returns (uint256[] memory tokenIds, uint256 next)
     {
+        // Shattered crystals belong to the zero address, which owns nothing, as for `balanceOf`.
+        if (owner == address(0)) revert ERC721InvalidOwner(address(0));
         uint256 last = lastTokenId;
         if (cursor == 0) cursor = 1;
         if (cursor > last) return (new uint256[](0), 0);
@@ -185,17 +201,31 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
 
     /**
      * @dev SEASON0.md §2.2, Accrual: plaintext, and first in every call that touches a crystal's MANA. Credits the
-     *      whole MANA accrued since `lastAccrual` and returns the new balance, for the caller to store or spend.
-     *      `lastAccrual` moves by whole MANA, not to now, so the remainder waits for the next call.
+     *      whole MANA accrued since `lastAccrual` to `crystal.mana`, and returns the new balance. `lastAccrual` moves
+     *      by whole MANA, not to now, so the remainder waits for the next call.
+     *
+     *      The new balance is stored but not granted: the caller seals the balance its call ends with. Storing it
+     *      here means a caller that reads `crystal.mana` afterwards, or accrues twice, still sees the credit.
      */
-    function _accrue(Crystal storage crystal) internal returns (euint64) {
+    function _accrue(Crystal storage crystal) internal returns (euint64 mana) {
         uint64 units = _pendingMana(crystal);
         crystal.lastAccrual += units * SECONDS_PER_MANA;
-        return FHE.add(crystal.mana, units);
+        mana = FHE.add(crystal.mana, units);
+        crystal.mana = mana;
     }
 
     function _pendingMana(Crystal storage crystal) internal view returns (uint64) {
         return (uint64(block.timestamp) - crystal.lastAccrual) / SECONDS_PER_MANA;
+    }
+
+    /**
+     * @dev A season's pot, from GARDEN_ZERO while it is empty. For an empty handle `FHE.add` would use an encrypted
+     *      plaintext 0, and a shatterer holding the crystal's MANA handle could then recompute the season's first pot
+     *      in the same block.
+     */
+    function _potOf(uint256 season) internal view returns (euint64 pot) {
+        pot = _pots[season];
+        if (!FHE.isInitialized(pot)) pot = GARDEN_ZERO;
     }
 
     /// A stored handle is granted to this contract, to use it later, and to the crystal's owner, to read it, and to

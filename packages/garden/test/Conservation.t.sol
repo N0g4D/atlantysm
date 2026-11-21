@@ -6,25 +6,27 @@ import {CommonBase} from "forge-std/Base.sol";
 import {StdUtils} from "forge-std/StdUtils.sol";
 import {Garden} from "../src/Garden.sol";
 import {GardenFixture} from "./utils/GardenFixture.sol";
+import {GardenHarness} from "./utils/GardenHarness.sol";
 
 /**
- * @dev Drives Garden through random sequences of forging, shattering and waiting. Each call is a transaction, and
- *      it keeps its own account of what should hold: which crystals are live, and how much MANA accrual has credited.
+ * @dev Drives Garden through random sequences of forging, acting, shattering and waiting, one transaction per call.
+ *      It keeps its own account of what should hold: which crystals are live, and how much MANA accrual has credited.
+ *      `act` stands in for the actions to come (T04, T05), which will credit MANA the same way.
  */
 contract GardenHandler is CommonBase, StdUtils {
-    Garden internal immutable garden;
+    /// RULES.md §12: a day over 100 MANA. A copy rather than Garden's own value, so that what the handler expects
+    /// does not rest on the contract's arithmetic.
+    uint256 internal constant SECONDS_PER_MANA = 864;
+
+    GardenHarness internal immutable garden;
     address[] internal actors;
     uint256[] internal live;
     mapping(uint256 tokenId => uint256) internal forgedAt;
+    mapping(uint256 tokenId => uint256) internal lastCreditAt;
+    /// What accrual credited to crystals that have since been shattered, each up to its shattering.
+    uint256 internal creditedToShattered;
 
-    /**
-     * @notice The MANA accrual has credited, worked out from forging and shattering times alone. A crystal shattered
-     *         at `t` has accrued `(t - forgedAt) / SECONDS_PER_MANA` whole MANA, all of it credited by then. Nothing
-     *         else in T03 credits MANA.
-     */
-    uint256 public credited;
-
-    constructor(Garden garden_, address[] memory actors_) {
+    constructor(GardenHarness garden_, address[] memory actors_) {
         garden = garden_;
         actors = actors_;
     }
@@ -36,6 +38,14 @@ contract GardenHandler is CommonBase, StdUtils {
         uint256 tokenId = garden.forge{value: charge}();
         live.push(tokenId);
         forgedAt[tokenId] = block.timestamp;
+        lastCreditAt[tokenId] = block.timestamp;
+    }
+
+    function act(uint256 crystalSeed) external {
+        if (live.length == 0) return;
+        uint256 tokenId = live[bound(crystalSeed, 0, live.length - 1)];
+        garden.act(tokenId);
+        lastCreditAt[tokenId] = block.timestamp;
     }
 
     function shatter(uint256 crystalSeed) external {
@@ -44,7 +54,7 @@ contract GardenHandler is CommonBase, StdUtils {
         uint256 tokenId = live[index];
         live[index] = live[live.length - 1];
         live.pop();
-        credited += (block.timestamp - forgedAt[tokenId]) / garden.SECONDS_PER_MANA();
+        creditedToShattered += (block.timestamp - forgedAt[tokenId]) / SECONDS_PER_MANA;
 
         vm.prank(garden.ownerOf(tokenId));
         garden.shatter(tokenId);
@@ -59,11 +69,27 @@ contract GardenHandler is CommonBase, StdUtils {
     function liveCrystals() external view returns (uint256[] memory) {
         return live;
     }
+
+    /**
+     * @notice The MANA accrual should have credited so far. A crystal last credited at `t` holds
+     *         `(t - forgedAt) / SECONDS_PER_MANA` whole MANA in all, however many credits it took, because the remainder
+     *         of each credit waits for the next.
+     */
+    function credited() external view returns (uint256 total) {
+        total = creditedToShattered;
+        for (uint256 i; i < live.length; i++) {
+            total += (lastCreditAt[live[i]] - forgedAt[live[i]]) / SECONDS_PER_MANA;
+        }
+    }
 }
 
 /// SEASON0.md §5, Conservation: the ETH balance and the MANA, fuzzed over sequences of calls.
 contract ConservationTest is GardenFixture {
     GardenHandler internal handler;
+
+    function _deploy(Garden.Params memory params) internal override returns (Garden) {
+        return new GardenHarness(params);
+    }
 
     function setUp() public override {
         super.setUp();
@@ -78,7 +104,7 @@ contract ConservationTest is GardenFixture {
         for (uint256 i; i < actors.length; i++) {
             vm.deal(actors[i], 1_000 ether);
         }
-        handler = new GardenHandler(garden, actors);
+        handler = new GardenHandler(GardenHarness(address(garden)), actors);
         targetContract(address(handler));
     }
 
@@ -92,8 +118,9 @@ contract ConservationTest is GardenFixture {
         assertEq(address(garden).balance, CHARGE * live, "ETH held");
     }
 
-    /// RULES.md §3, invariant 5: MANA comes only from accrual, and none is created or lost. What the crystals and
-    /// the pots hold, read with `plaintextOf`, is what accrual has credited.
+    /// RULES.md §3, invariant 5: MANA comes only from accrual, and none is created or lost. What the live crystals
+    /// and the pots hold, read with `plaintextOf`, is what accrual has credited, counted by the handler from the times
+    /// alone.
     /// forge-config: default.invariant.runs = 64
     /// forge-config: default.invariant.depth = 64
     /// forge-config: default.invariant.fail-on-revert = true
