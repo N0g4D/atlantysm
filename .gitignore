@@ -26,3 +26,5 @@ promo_links.csv
 
 # Ignore report logs
 *.txt
+# ...but not Forge's remappings: a Foundry package does not compile without its remappings.txt.
+!remappings.txt

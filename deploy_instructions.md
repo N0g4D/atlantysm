@@ -4,17 +4,18 @@ Contracts to Ethereum Sepolia, client to Vercel. Written for the hackathon build
 
 Everything below was verified against this repo's toolchain (Foundry 1.7.1, MUD 2.2.23, Vite 4.5,
 Node 20) rather than recalled — where a step exists to avoid a specific failure, the failure is
-named.
+named. The workspace has since moved to Node 24: the MVP's build and tests pass on it, but this
+deploy has not been repeated on it.
 
 ---
 
 ## 0. Before you start
 
-**Node 20 is mandatory.** `pnpm` refuses anything else (`engines: node ^20`), and this machine
+**Node 24 is mandatory.** `pnpm` refuses anything else (`engines: node ^24`), and this machine
 defaults to a newer version. Every command below assumes you have run:
 
 ```bash
-export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh"; nvm use 20
+export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh"; nvm use 24
 ```
 
 You also need Sepolia ETH on the deployer account — the World, four Systems, two token facades and

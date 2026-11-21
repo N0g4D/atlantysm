@@ -17,7 +17,7 @@ request ticks its task here.
 
 ## M0 — Foundations (by Sunday 22 November)
 
-- [ ] **T01 · Node 24 and `packages/garden`.** First move the workspace to Node 24: `.nvmrc` and the root `engines`
+- [x] **T01 · Node 24 and `packages/garden`.** First move the workspace to Node 24: `.nvmrc` and the root `engines`
   still say 20, and CI and Vercel follow them. The MUD MVP must keep building and passing its tests on Node 24; if
   it cannot, stop and report. Then scaffold `packages/garden`: Foundry with `@fhevm/forge`, set up as its README
   describes, and a smoke test that encrypts an input, computes on it and decrypts the result. The root `build` and

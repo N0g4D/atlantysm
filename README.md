@@ -193,10 +193,10 @@ mid-mint, a reentrancy surface bought for nothing when the price is readable bef
 
 ## Getting Started
 
-Requires **Node 20**, **pnpm 9**, and **Foundry**.
+Requires **Node 24**, **pnpm 9**, and **Foundry**.
 
 ```bash
-pnpm install                                                    # install the workspace (contracts + client)
+pnpm install                                                    # install the workspace (contracts + client + garden)
 cp packages/contracts/.env.example packages/contracts/.env      # local deployer key; `.env` is gitignored
 pnpm dev                                                        # mprocs: anvil, contract deploy + watch, client, and the MUD explorer
 ```
@@ -205,13 +205,17 @@ The `.env` step is not optional: without it the deploy stops at `Missing PRIVATE
 variable`. The example file carries anvil's well-known first key, and its Sepolia values are ignored
 on a local chain.
 
+On Node 24 the explorer pane crashes on its first block. The MUD indexer behind it was written for
+`better-sqlite3` 8, which does not build on Node 24, and the version 12 installed instead refuses its
+transactions (see `docs/SEASON0.md` §3). The rest of `pnpm dev` works: the client syncs over RPC.
+
 Open <http://localhost:3000>. The client uses a **burner wallet** generated in your browser, so
 there is no connect flow — but it starts with zero ETH, and minting costs real ETH. Fund it with
 **“top up”** in the MUD Dev Tools panel (bottom right) before forging your first crystal.
 
 ```bash
-pnpm test        # 152 contract tests (deploys a World, then runs forge test) + client typecheck
-pnpm build       # contracts codegen + client production bundle
+pnpm test        # 152 contract tests (deploys a World, then runs forge test) + client typecheck + garden tests
+pnpm build       # contracts codegen + client production bundle + garden build
 ```
 
 ---

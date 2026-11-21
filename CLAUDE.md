@@ -31,7 +31,7 @@ and memory is not a source.
 
 ## Commands
 
-Node 24 (T01 moves the workspace off Node 20), pnpm 9, Foundry 1.7.1. The scripts appear with T01 and T10.
+Node 24, pnpm 9, Foundry 1.7.1. The `app` scripts appear with T10.
 
 ```bash
 pnpm install

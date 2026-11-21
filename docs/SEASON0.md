@@ -197,15 +197,24 @@ Filled in by T02 and kept current.
 ## 3. Toolchain
 
 - **Solidity:** solc 0.8.24, EVM `cancun`; Foundry 1.7.1, pinned in CI.
-- **Contract packages:** `@fhevm/solidity` ^0.13.4 and `@openzeppelin/contracts` ^5.
-- **Test packages:** `@fhevm/forge` ^0.13.1 (tests inherit `TestFhevm`), `encrypted-types` ^0.0.4, and `forge-std`
-  remapped exactly as `forge-std/`. Follow the `@fhevm/forge` README for the installed version, and do not mix it
-  with the older standalone `forge-fhevm` template.
+- **Contract packages:** `@fhevm/solidity` ^0.13.4, `encrypted-types` ^0.0.4 (which `FHE.sol` imports, so every
+  contract needs it to compile) and `@openzeppelin/contracts` ^5.
+- **Test packages:** `@fhevm/forge` ^0.13.1 (tests inherit `TestFhevm`) and `forge-std` v1.11.0, the tag that
+  README installs, remapped exactly as `forge-std/`. Follow the `@fhevm/forge` README for the installed version, and
+  do not mix it with the older standalone `forge-fhevm` template.
 - **Client:** `@zama-fhe/sdk` and `@zama-fhe/react-sdk` ^3.8.0. Never import `@fhevm/sdk` (the SDK's internal
   backend) or `@zama-fhe/relayer-sdk` (deprecated). Start from the official `react-wagmi` example at the
   installed version's tag.
 - **Runtime:** Node 24 for the whole workspace from T01 (Node 20 reached end of life in April 2026), pnpm 9 from
-  `packageManager`. CI and Vercel take the version from `.nvmrc` and the root `engines`.
+  `packageManager`. CI and Vercel take the version from `.nvmrc` and the root `engines`. The frozen MVP keeps two
+  leftovers:
+  - Its MUD indexer asks for `better-sqlite3` 8, which does not build on Node 24, so the root `pnpm.overrides` lifts
+    8 to 12. Version 12 refuses the async transactions of MUD's drizzle-orm 0.28.6, so the explorer of `pnpm dev`
+    crashes on its first block. Nothing else needs it: the MVP client syncs over RPC, and build and tests never load
+    it. No version both ships Node 24 binaries and accepts those transactions, and Alessio chose this over a patch. A
+    global pnpm 11 warns that it ignores the `pnpm` field of `package.json`, then hands over to the pinned 9.1.0,
+    which reads it, so the override stays in `package.json` while the workspace is on pnpm 9.
+  - `@types/node` stays at 20, because version 24 needs a newer TypeScript than the 5.4.2 the MVP pins.
 - **Relayer:** the Sepolia relayer is open and needs no API key. Mainnet needs one; that is a later problem.
 - **Reference:** Zama's agent skills (`zama-ai/skills`), enabled for the repository in `.claude/settings.json`.
 
