@@ -23,7 +23,7 @@ request ticks its task here.
   describes, and a smoke test that encrypts an input, computes on it and decrypts the result. The root `build` and
   `test` scripts run every package, so the existing CI job covers the new one.
   *Done when* `pnpm --filter garden test` passes locally and in CI, and the MVP's checks stay green.
-- [ ] **T02 · Duel spike (gate).** A throwaway contract under `packages/garden/test/spike/` that implements *Join*
+- [x] **T02 · Duel spike (gate).** A throwaway contract under `packages/garden/test/spike/` that implements *Join*
   and *Publish* from `SEASON0.md` §2.2 for two crystals with given elements and levels. Test all nine element
   pairs, mirrors with a higher, lower and equal level, the three forfeit cases, and a forged and a replayed proof.
   Measure the HCU of joining.

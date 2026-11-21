@@ -183,16 +183,22 @@ refined, and every change is recorded here. After it, changing the API means a n
 
 ### 2.6 HCU budget
 
-Filled in by T02 and kept current.
+Filled in by T02 and kept current. Each number is `lastHCU()` for a single call whose inputs were made in `setUp`.
+A forge test is one transaction, so within it a handle carries the depth of the calls that made it and transient
+grants survive; `setUp` runs as a transaction of its own, like an earlier transaction on chain.
 
 | Function | HCU per transaction | Depth |
 |---|---|---|
 | `forge` | | |
 | `attune` | | |
-| `openLobby` | | |
-| `joinLobby` | | |
+| `openLobby` | 466,064 | 466,000 |
+| `joinLobby` | 2,259,064 | 906,000 |
 | `closeSeason` | | |
 | transfer | | |
+
+`openLobby` and `joinLobby` were measured on the T02 spike (`packages/garden/test/spike/`); T05 measures them again
+on `Garden`. In `joinLobby` the triangle's scalar `rem` is the most expensive operation, 440,000 HCU, and it lies on
+the longest chain: `add`, `rem`, `eq`, three `select`, then the payout `add`.
 
 ## 3. Toolchain
 
