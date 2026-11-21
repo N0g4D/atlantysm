@@ -13,7 +13,8 @@ import {FhevmHCUMeter} from "@fhevm/forge/FhevmVm.sol";
  *      sender may use (rule 5).
  */
 contract SmokePurse is ZamaEthereumConfig {
-    /// Public, so it stays a plaintext operand: only values that are public anyway are ever encrypted.
+    /// Public, so it is passed as a plaintext operand: there is nothing to hide, and an operation on a
+    /// plaintext operand costs less HCU than the same operation on an encrypted copy.
     uint64 public constant PRICE = 10;
 
     mapping(address owner => euint64) public balanceOf;
@@ -56,6 +57,12 @@ contract SmokeTest is TestFhevm {
     function testSelectKeepsAnAmountThatCannotPay() public {
         _pay(alice, 7);
         assertEq(decrypt(purse.balanceOf(alice), address(purse), aliceKey), 7);
+    }
+
+    /// The boundary: `ge` pays here where `gt` would not.
+    function testAnAmountEqualToThePricePays() public {
+        _pay(alice, purse.PRICE());
+        assertEq(decrypt(purse.balanceOf(alice), address(purse), aliceKey), 0);
     }
 
     function testAStrangerCannotDecrypt() public {

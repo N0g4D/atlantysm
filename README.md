@@ -205,6 +205,10 @@ The `.env` step is not optional: without it the deploy stops at `Missing PRIVATE
 variable`. The example file carries anvil's well-known first key, and its Sepolia values are ignored
 on a local chain.
 
+On Node 24 the explorer pane crashes on its first block. The MUD indexer behind it was written for
+`better-sqlite3` 8, which does not build on Node 24, and the version 12 installed instead refuses its
+transactions (see `docs/SEASON0.md` §3). The rest of `pnpm dev` works: the client syncs over RPC.
+
 Open <http://localhost:3000>. The client uses a **burner wallet** generated in your browser, so
 there is no connect flow — but it starts with zero ETH, and minting costs real ETH. Fund it with
 **“top up”** in the MUD Dev Tools panel (bottom right) before forging your first crystal.
