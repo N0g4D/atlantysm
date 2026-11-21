@@ -85,7 +85,8 @@ mana  = sub(mana, spent)
 pot[currentSeason] = add(pot[currentSeason], spent)
 ```
 
-**Open a lobby** `(tokenId, uint64 stake)` — owner only, the crystal not already waiting, `stake > 0`.
+**Open a lobby** `(tokenId, uint64 stake)` — owner only, the crystal not already waiting, and
+`MIN_STAKE <= stake <= MAX_STAKE` (`RULES.md` §7). The stake and its bounds are public, so the check reveals nothing.
 
 ```
 paid = ge(mana, stake)
@@ -240,7 +241,8 @@ Filled in by T02 and kept current.
   the new level and MANA. No event or revert differs between a rise, a refused rise and a hold, or between a
   forfeit and a defeat.
 - **Adversarial.** A forged outcome, a replayed proof and a second publish are rejected. A season cannot be
-  closed early or twice. A crystal waiting in a lobby cannot be transferred, shattered or entered twice.
+  closed early or twice. A crystal waiting in a lobby cannot be transferred, shattered or entered twice. A stake
+  below or above its bounds is rejected.
 - **Ranking.** The same duels give the same top three whatever order their results are published in.
 - **Conservation**, fuzzed: the ETH balance equals `CHARGE ×` live crystals, and the MANA in crystals and pots
   equals the MANA accrued, read with `plaintextOf`.

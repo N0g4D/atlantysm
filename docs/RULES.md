@@ -101,9 +101,11 @@ There is no other choice to make inside a duel.
 **Mirrors.** When both crystals share an element, the higher level wins. When element and level are both equal,
 an encrypted coin decides. Every duel has exactly one winner and one loser.
 
-**Lobbies.** A player opens a lobby with one crystal and a public **stake** in MANA. Anyone can join it with one
-crystal of their own. A crystal can wait in one open lobby at a time. The creator can cancel a lobby that nobody
-has joined after **24 hours** *(parameter)*.
+**Lobbies.** A player opens a lobby with one crystal and a public **stake** in MANA, from **10** to **100**
+*(parameters)*: at least a tenth of a day's MANA, so that a stake is never symbolic, and at most a day's, so that no
+lobby asks for more than a day of MANA can cover. Anyone can join it with one crystal of their own. A crystal can
+wait in one open lobby at a time. The creator can cancel a lobby that nobody has joined after **24 hours**
+*(parameter)*.
 
 **Stakes and forfeits.** The creator puts up the stake when opening the lobby, the challenger when joining, both
 from their encrypted balances. A crystal that cannot cover the stake loses by forfeit, and nobody can tell a
@@ -185,6 +187,7 @@ Sanctuary, the Arena and the seasonal ranking, with simulated MANA and charges i
 | MANA flow | 100 MANA per crystal per day |
 | Level cost | 50 × L² MANA, from level L to L + 1 |
 | Maximum level | 10 |
+| Stake | From 10 to 100 MANA |
 | Lobby timeout | 24 hours |
 | Season length | 3 days in Season 0, then 4 weeks |
 | Season close delay | 1 hour after the season ends |
