@@ -24,4 +24,9 @@ contract GardenHarness is Garden {
         _accrue(crystal);
         crystal.mana = _seal(_accrue(crystal), ownerOf(tokenId));
     }
+
+    /// An action that forgets to grant the owner the balance it ends with. It must not lock the crystal.
+    function actWithoutSealing(uint256 tokenId) external {
+        _accrue(_crystals[tokenId]);
+    }
 }

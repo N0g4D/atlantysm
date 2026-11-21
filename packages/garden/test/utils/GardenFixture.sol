@@ -151,6 +151,23 @@ abstract contract GardenFixture is TestFhevm {
         assertEq(grants, expected.length, "number of grants");
     }
 
+    /// Every persistent grant went to `account`. Returns the handles granted, in order.
+    function _assertGrantsOnlyTo(Vm.Log[] memory logs, address account) internal view returns (bytes32[] memory) {
+        address acl = getCoprocessorConfig(address(garden)).ACLAddress;
+        bytes32[] memory handles = new bytes32[](logs.length);
+        uint256 grants;
+        for (uint256 i; i < logs.length; i++) {
+            if (logs[i].emitter != acl || logs[i].topics.length == 0 || logs[i].topics[0] != ACL_ALLOWED) continue;
+            address grantee = address(uint160(uint256(logs[i].topics[2])));
+            assertEq(grantee, account, string.concat("a grant to ", vm.toString(grantee)));
+            handles[grants++] = abi.decode(logs[i].data, (bytes32));
+        }
+        assembly ("memory-safe") {
+            mstore(handles, grants)
+        }
+        return handles;
+    }
+
     /// No handle was made publicly decryptable (SEASON0.md §2.3, rule 4: only duel outcomes ever are).
     function _assertNothingPublic(Vm.Log[] memory logs) internal view {
         address acl = getCoprocessorConfig(address(garden)).ACLAddress;

@@ -56,8 +56,8 @@ transfer before deployment.
 ### 2.2 Encrypted logic (normative)
 
 Names follow `@fhevm/solidity` 0.13.4; check the installed `FHE.sol` before writing a call. After every operation,
-call `FHE.allowThis` on each new handle that is still stored when the call ends, and `FHE.allow(handle, owner)` on
-each one the owner may read.
+call `FHE.allowThis` on each new handle that is stored, and `FHE.allow(handle, owner)` on each one the owner may
+read.
 
 **Handles.** The protocol derives a handle from its operation, its operands and the block, not from the contract or
 the caller.
@@ -76,9 +76,9 @@ Garden keeps to this in three places:
   the crystal's MANA handle, could recompute the season's first pot.
 - **A transfer seals the crystal again with `GARDEN_ZERO`** (Transfer, below).
 
-Every later handle combines a crystal's own handles with public scalars, encrypted inputs, other crystals' handles or
-`GARDEN_ZERO`. So nobody but Garden and the crystal's owner can recompute it. The element is the exception, because
-past owners keep it under the rules.
+Every later stored handle combines a crystal's own handles with public scalars, encrypted inputs, other crystals'
+handles or `GARDEN_ZERO`. So nobody but Garden and the crystal's owner can recompute it. The element is the exception,
+because past owners keep it under the rules.
 
 **Accrual.** Plaintext, and run first in every call that touches a crystal's MANA. `SECONDS_PER_MANA` is
 `1 days / MANA_PER_DAY`; the constructor requires the division to be exact.
@@ -89,8 +89,11 @@ lastAccrual += units * SECONDS_PER_MANA          // the remainder waits for the 
 mana         = add(mana, units)
 ```
 
-Garden stores the credit at once, without granting it, and the call grants the balance it ends with. A call that
-reads `mana` after accruing, or accrues twice, still finds the credit.
+Garden stores the credit at once and keeps it for itself (`allowThis`). The call then grants the owner the balance it
+ends with.
+- A call that reads `mana` after accruing, or accrues twice, still finds the credit.
+- A call that forgets the owner's grant cannot lock the crystal. The next action, or a shatter, still computes on the
+  stored balance, and the charge still comes back.
 
 **Forge** — payable, `msg.value == CHARGE`.
 

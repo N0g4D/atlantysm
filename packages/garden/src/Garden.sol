@@ -204,13 +204,15 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
      *      whole MANA accrued since `lastAccrual` to `crystal.mana`, and returns the new balance. `lastAccrual` moves
      *      by whole MANA, not to now, so the remainder waits for the next call.
      *
-     *      The new balance is stored but not granted: the caller seals the balance its call ends with. Storing it
-     *      here means a caller that reads `crystal.mana` afterwards, or accrues twice, still sees the credit.
+     *      The credit is stored, and kept for this contract, at once. So a call that reads `crystal.mana` afterwards,
+     *      or accrues twice, still finds it. And a call that ends without granting the owner its balance cannot lock
+     *      the crystal: the next action, or a shatter, still computes on it. Granting the owner the balance the call
+     *      ends with is the caller's part.
      */
     function _accrue(Crystal storage crystal) internal returns (euint64 mana) {
         uint64 units = _pendingMana(crystal);
         crystal.lastAccrual += units * SECONDS_PER_MANA;
-        mana = FHE.add(crystal.mana, units);
+        mana = FHE.allowThis(FHE.add(crystal.mana, units));
         crystal.mana = mana;
     }
 

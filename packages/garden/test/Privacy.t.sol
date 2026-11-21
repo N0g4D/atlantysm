@@ -110,7 +110,8 @@ contract PrivacyTest is GardenFixture {
     }
 
     /// RULES.md §8 and §9: nobody can read the centre's total, not even the owner whose crystal filled it.
-    /// Shattering grants the pot to the contract alone, and makes nothing publicly decryptable.
+    /// Shattering grants only to the contract, the credited balance as accrual keeps it and then the pot, and makes
+    /// nothing publicly decryptable.
     function testNobodyCanDecryptTheCentre() public {
         uint256 tokenId = _forge(alice);
         _wait(1 days);
@@ -120,9 +121,9 @@ contract PrivacyTest is GardenFixture {
         Vm.Log[] memory logs = vm.getRecordedLogs();
 
         euint64 pot = garden.potOf(garden.currentSeason());
-        Grant[] memory grants = new Grant[](1);
-        grants[0] = _grant(address(garden), pot);
-        _assertGrants(logs, grants);
+        bytes32[] memory granted = _assertGrantsOnlyTo(logs, address(garden));
+        assertEq(granted.length, 2, "number of grants");
+        assertEq(granted[1], euint64.unwrap(pot), "the pot, last");
         _assertNothingPublic(logs);
 
         _assertCannotDecrypt(pot, alice, aliceKey);

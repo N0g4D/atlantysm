@@ -129,10 +129,13 @@ contract ManaTest is GardenFixture {
         harness.act(tokenId);
         Vm.Log[] memory logs = vm.getRecordedLogs();
 
+        // Accrual keeps the credit for the contract at once, and the action then seals it for the contract and the
+        // owner: the contract twice, the owner once, nobody else.
         euint64 mana = garden.crystalOf(tokenId).mana;
-        Grant[] memory grants = new Grant[](2);
+        Grant[] memory grants = new Grant[](3);
         grants[0] = _grant(address(garden), mana);
-        grants[1] = _grant(alice, mana);
+        grants[1] = _grant(address(garden), mana);
+        grants[2] = _grant(alice, mana);
         _assertGrants(logs, grants);
         _assertNothingPublic(logs);
 
@@ -187,5 +190,46 @@ contract ManaTest is GardenFixture {
         _wait(1 days);
         _shatter(alice, tokenId);
         assertEq(plaintextOf(garden.potOf(1)), 2 * MANA_PER_DAY);
+    }
+}
+
+/**
+ * @dev Accrual across transactions. A forge test is one transaction, so transient grants survive between its calls and
+ *      would hide a balance the contract forgot to keep. Here the first action runs in setUp, a transaction of its
+ *      own, as an earlier transaction would on chain.
+ */
+contract ManaAcrossTransactionsTest is GardenFixture {
+    GardenHarness internal harness;
+    uint256 internal crystal;
+
+    function _deploy(Garden.Params memory params) internal override returns (Garden) {
+        harness = new GardenHarness(params);
+        return harness;
+    }
+
+    function setUp() public override {
+        super.setUp();
+        crystal = _forge(alice);
+        _wait(1 days);
+        harness.actWithoutSealing(crystal);
+        _wait(1 days);
+    }
+
+    /// RULES.md §3, invariant 1: a balance that an action left without the owner's grant does not lock the crystal.
+    /// The contract kept it, so a shatter still computes on it, and the charge comes back.
+    function testABalanceLeftUngrantedDoesNotLockTheCrystal() public {
+        // The case is what it claims: the owner was not granted the stored balance.
+        _assertCannotDecrypt(garden.crystalOf(crystal).mana, alice, aliceKey);
+
+        uint256 balance = alice.balance;
+        _shatter(alice, crystal);
+        assertEq(alice.balance, balance + CHARGE);
+        assertEq(plaintextOf(garden.potOf(1)), 2 * MANA_PER_DAY);
+    }
+
+    /// The next action seals the balance again, and the owner reads everything credited so far.
+    function testTheNextActionGrantsTheBalanceAgain() public {
+        harness.act(crystal);
+        assertEq(decrypt(garden.crystalOf(crystal).mana, address(garden), aliceKey), 2 * MANA_PER_DAY);
     }
 }
