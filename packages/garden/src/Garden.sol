@@ -181,7 +181,7 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
         // for this contract and for the owner, who submits it.
         if (proof.length == 0) revert MissingProof();
         // The handle sits in the calldata. Used twice, it would show everyone that two attunements made the same
-        // choice, so each attunement takes a fresh encryption. Both checks read public calldata only.
+        // choice, so each attunement takes a fresh encryption. Both checks read only public data.
         bytes32 input = externalEbool.unwrap(rise);
         if (_usedChoices[input]) revert ChoiceReused();
         _usedChoices[input] = true;

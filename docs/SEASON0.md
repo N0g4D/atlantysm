@@ -125,7 +125,7 @@ pot[currentSeason] = add(pot[currentSeason], spent)    // an empty pot starts fr
   encrypted for Garden and for the owner, who submits it.
 - **Once per input.** The input's handle sits in the calldata. Used twice, it would show everyone that two
   attunements made the same choice. Garden records every handle it accepts and refuses it a second time, so each
-  attunement takes a fresh encryption. Both checks read public calldata only.
+  attunement takes a fresh encryption. Both checks read only public data.
 - **New handles every time.** On a hold or a refused rise, `spent` is an encrypted 0, so the level, the MANA and the
   pot get new handles whatever happened. An unchanged handle would tell everyone that nothing had changed.
 - **Who can recompute.** Importing the input leaves the caller allowed on `r` until the transaction ends. A contract
@@ -303,7 +303,7 @@ the longest chain: `add`, `rem`, `eq`, three `select`, then the payout `add`.
 ## 3. Toolchain
 
 - **Solidity:** solc 0.8.24, EVM `cancun`, the optimizer on at 200 runs; Foundry 1.7.1, pinned in CI.
-  - Every FHE call inlines its checks. At T04, `Garden` is 11,368 bytes with the optimizer and would be 19,501
+  - Every FHE call inlines its checks. At T04, `Garden` is 11,442 bytes with the optimizer and would be 19,632
     without it, of the 24,576 allowed.
   - Verification on Etherscan (T09) must use the same settings.
 - **Contract packages:** `@fhevm/solidity` ^0.13.4, `encrypted-types` ^0.0.4 (which `FHE.sol` imports, so every

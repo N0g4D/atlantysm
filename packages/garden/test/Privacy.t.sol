@@ -33,7 +33,7 @@ contract PotRecomputer is ZamaEthereumConfig {
  * @dev A contract that owns a crystal. It attunes it, then in the same transaction recomputes what `attune` computed,
  *      from the handles it holds: the crystal's, as its owner, and the choice, which importing the input left it
  *      allowed on until the transaction ends. It repeats `attune` operation by operation, so a change to those
- *      operations must be made here too: in another order they give other handles.
+ *      operations must be made here too: operands combined another way give other handles.
  */
 contract AttuneRecomputer is ZamaEthereumConfig {
     function forge(Garden garden) external payable returns (uint256) {
