@@ -33,6 +33,10 @@ abstract contract GardenFixture is TestFhevm {
     /// The ACL's events for a persistent grant, and for handles made publicly decryptable.
     bytes32 internal constant ACL_ALLOWED = keccak256("Allowed(address,address,bytes32)");
     bytes32 internal constant ACL_PUBLIC = keccak256("AllowedForDecryption(address,bytes32[])");
+    /// The executor's event for an imported input. Its proof sits in the calldata anyway.
+    bytes32 internal constant VERIFY_INPUT = keccak256("VerifyInput(address,bytes32,address,bytes,uint8,bytes32)");
+    /// Stands in for a handle when two runs are compared: handles differ between any two runs, whatever the secrets.
+    bytes32 internal constant HANDLE = keccak256("a handle");
 
     /// A persistent ACL grant: `account` may use `handle`, and decrypt it if it is a user.
     struct Grant {
@@ -334,26 +338,64 @@ abstract contract GardenFixture is TestFhevm {
         }
     }
 
+    // -- What an outsider sees ------------------------------------------------------------------------------
+
     /**
-     * @dev Two calls look the same from outside when their logs match in everything but handles: the same logs in
-     *      order, each with its emitter, signature and size. Garden's own events carry public data only, so they
-     *      match in full. The ACL's name the accounts granted, so their indexed fields match too.
+     * @dev The logs of a call as an outsider can compare them with another run's: every handle masked, in the topics
+     *      and in every word of the data, since handles differ between any two runs whatever the secrets. Everything
+     *      else stays and must match: emitters, events, accounts granted, scalar operands, plaintexts encrypted, sizes.
+     *      An imported input's handle and proof are masked too: they sit in the calldata, and every encryption makes
+     *      new ones, whatever it encrypts. Masked as soon as the call is observed, because reverting to a snapshot later
+     *      takes the test library's plaintexts with it, and with them the means to tell a handle.
      */
-    function _assertSameLogs(Vm.Log[] memory a, Vm.Log[] memory b) internal view {
-        address acl = getCoprocessorConfig(address(garden)).ACLAddress;
+    function _masked(Vm.Log[] memory logs) internal returns (Vm.Log[] memory) {
+        for (uint256 i; i < logs.length; i++) {
+            bytes32[] memory topics = logs[i].topics;
+            for (uint256 j; j < topics.length; j++) {
+                topics[j] = _maskHandle(topics[j]);
+            }
+            if (topics.length > 0 && topics[0] == VERIFY_INPUT) {
+                (, address user, bytes memory proof, uint8 inputType,) =
+                    abi.decode(logs[i].data, (bytes32, address, bytes, uint8, bytes32));
+                logs[i].data = abi.encode(HANDLE, user, new bytes(proof.length), inputType, HANDLE);
+                continue;
+            }
+            bytes memory data = logs[i].data;
+            for (uint256 offset; offset + 32 <= data.length; offset += 32) {
+                bytes32 word;
+                assembly ("memory-safe") {
+                    word := mload(add(add(data, 32), offset))
+                }
+                word = _maskHandle(word);
+                assembly ("memory-safe") {
+                    mstore(add(add(data, 32), offset), word)
+                }
+            }
+        }
+        return logs;
+    }
+
+    /// The values now in these slots of Garden's storage, every handle masked.
+    function _maskedValues(bytes32[] memory slots) internal returns (bytes32[] memory values) {
+        values = new bytes32[](slots.length);
+        for (uint256 i; i < slots.length; i++) {
+            values[i] = _maskHandle(vm.load(address(garden), slots[i]));
+        }
+    }
+
+    /// HANDLE if the word is a handle the test library holds a plaintext for, the word itself otherwise.
+    function _maskHandle(bytes32 word) internal returns (bytes32) {
+        return word != 0 && hasPlaintext(ebool.wrap(word)) ? HANDLE : word;
+    }
+
+    /// Two masked runs look the same from outside: the same logs, in order, equal in everything but handles.
+    function _assertSameLogs(Vm.Log[] memory a, Vm.Log[] memory b) internal pure {
         assertEq(a.length, b.length, "number of logs");
         for (uint256 i; i < a.length; i++) {
-            Vm.Log memory x = a[i];
-            Vm.Log memory y = b[i];
             string memory at = string.concat("log ", vm.toString(i));
-            assertEq(x.emitter, y.emitter, string.concat(at, ": emitter"));
-            assertEq(x.topics.length, y.topics.length, string.concat(at, ": topics"));
-            assertEq(x.topics[0], y.topics[0], string.concat(at, ": event"));
-            assertEq(x.data.length, y.data.length, string.concat(at, ": data size"));
-            if (x.emitter == address(garden)) assertEq(x.data, y.data, string.concat(at, ": Garden's data"));
-            if (x.emitter == address(garden) || x.emitter == acl) {
-                assertEq(x.topics, y.topics, string.concat(at, ": indexed fields"));
-            }
+            assertEq(a[i].emitter, b[i].emitter, string.concat(at, ": emitter"));
+            assertEq(a[i].topics, b[i].topics, string.concat(at, ": topics"));
+            assertEq(a[i].data, b[i].data, string.concat(at, ": data"));
         }
     }
 

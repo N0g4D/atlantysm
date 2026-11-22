@@ -82,6 +82,13 @@ Every later stored handle combines a crystal's own handles with public scalars, 
 handles or `GARDEN_ZERO`. So nobody but Garden and the crystal's owner can recompute it. The element is the exception,
 because past owners keep it under the rules.
 
+The Arena keeps to the same line:
+- **`creatorPaid`** is granted to Garden alone. The creator can recompute it in the opening block, from its own MANA and
+  the public stake, and learns only whether it paid, which it knew.
+- **A duel's outcome and both new balances** descend from the coin, which only Garden draws on every join. Nobody can
+  recompute them, not even an owner of both crystals. A publicly decryptable handle can be decrypted by anyone, but
+  only Garden may compute on it.
+
 **Accrual.** Plaintext, and run first in every call that touches a crystal's MANA. `SECONDS_PER_MANA` is
 `1 days / MANA_PER_DAY`; the constructor requires the division to be exact.
 
@@ -263,7 +270,9 @@ Refined so far:
     already used (§2.2).
 - **T05.**
   - **Construction.** `Params` gains `minStake`, `maxStake` and `lobbyTimeout`, readable as `MIN_STAKE`, `MAX_STAKE`
-    and `LOBBY_TIMEOUT`. The constructor refuses a zero minimum stake and a minimum above the maximum.
+    and `LOBBY_TIMEOUT`. The constructor refuses a zero minimum stake, a minimum above the maximum, and a lobby timeout
+    longer than a season: a crystal waiting in a lobby nobody joins cannot be shattered before the timeout. A deployment
+    with a short season (T09) needs a timeout as short. A zero timeout is allowed: the creator may cancel at once.
   - **The Arena.** `openLobby` returns the new lobby id and `joinLobby` the new duel id. Both start at 1 and are
     never reused. The creator can join its own lobby with another crystal (`RULES.md` §8 accepts it in Season 0).
   - **Reverts.** `StakeOutOfBounds`; `CrystalWaiting` when a waiting crystal opens a lobby, joins one (its own
@@ -275,7 +284,7 @@ Refined so far:
     - `crystalOf` also returns `openLobby`, `wins` and `losses`.
     - `recordOf(tokenId)` returns the wins and losses, for shattered crystals too.
     - `lobbyOf(lobbyId)` returns the crystal, the stake, `openedAt`, the status (`None`, `Open`, `Cancelled`,
-      `Fought`) and the `creatorPaid` handle, which only Garden may use.
+      `Fought`) and the `creatorPaid` handle, granted to Garden alone (§2.2, Handles).
     - `duelOf(duelId)` returns both crystals, the season, the stake, `published` and the `creatorWins` handle.
     - `openLobbies(cursor, count)` and `pendingDuels(cursor, count)` page by id like `crystalsOf`.
     - `lastLobbyId()` and `lastDuelId()`.

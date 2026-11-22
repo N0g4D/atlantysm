@@ -70,7 +70,8 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
         uint64 stake;
         uint64 openedAt;
         LobbyStatus status;
-        /// Whether the creator's MANA covered the stake when the lobby opened. Only this contract may use it.
+        /// Whether the creator's MANA covered the stake when the lobby opened. Granted to this contract alone. The creator
+        /// can recompute it in the opening block, from its own balance and the public stake, and learns only what it knew.
         ebool creatorPaid;
     }
 
@@ -179,9 +180,12 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
         // maximum, so a wrap at the maximum itself would do no harm, but exact values are simpler to check.
         bool levels = params.maxLevel >= 2 && params.maxLevel <= 15 && params.levelCost != 0
             && uint256(params.levelCost) * params.maxLevel * params.maxLevel <= type(uint64).max;
-        // A stake is never symbolic (RULES.md §7), and the bounds must leave a stake to choose.
-        bool stakes = params.minStake != 0 && params.minStake <= params.maxStake;
-        if (params.charge == 0 || !wholeSteps || params.seasonLength == 0 || !levels || !stakes) {
+        // A stake is never symbolic (RULES.md §7), and the bounds must leave a stake to choose. A crystal waiting in a
+        // lobby that nobody joins cannot be shattered before the timeout, so the timeout may not outlast a season: the
+        // charge must come back within reach (RULES.md §3, invariant 1).
+        bool arena =
+            params.minStake != 0 && params.minStake <= params.maxStake && params.lobbyTimeout <= params.seasonLength;
+        if (params.charge == 0 || !wholeSteps || params.seasonLength == 0 || !levels || !arena) {
             revert InvalidParams();
         }
         CHARGE = params.charge;
@@ -298,8 +302,8 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
 
     /**
      * @notice Opens a lobby with the sender's crystal and a public stake, from MIN_STAKE to MAX_STAKE MANA. The crystal
-     *         puts up the stake now, from its encrypted balance. One that cannot cover it puts up nothing and will lose
-     *         by forfeit, and nobody else can tell.
+     *         puts up the stake now, from its encrypted balance. One that cannot cover it puts up nothing: it loses by
+     *         forfeit to a challenger that pays, and from outside the duel looks like any other.
      */
     function openLobby(uint256 tokenId, uint64 stake) external returns (uint256 lobbyId) {
         // `ownerOf` reverts for a crystal that was never forged or is already shattered.
@@ -340,7 +344,8 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
         // A waiting crystal cannot be transferred, so its owner is the one who opened the lobby.
         address owner = ownerOf(tokenId);
         if (owner != msg.sender) revert NotOwner();
-        if (block.timestamp < lobby.openedAt + LOBBY_TIMEOUT) revert TooEarlyToCancel();
+        // Subtracted rather than added, so that no timeout can overflow and lock the crystal.
+        if (block.timestamp - lobby.openedAt < LOBBY_TIMEOUT) revert TooEarlyToCancel();
 
         lobby.status = LobbyStatus.Cancelled;
         Crystal storage crystal = _crystals[tokenId];

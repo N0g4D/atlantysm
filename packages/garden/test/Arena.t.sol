@@ -16,11 +16,14 @@ contract ArenaTest is GardenFixture {
     uint64 internal constant FUNDED = 100;
     uint64 internal constant SHORT = STAKE - 1;
 
-    /// What an outsider can observe of one call.
+    /// What an outsider can observe of one call, every handle masked (GardenFixture._masked).
     struct Trace {
         Vm.Log[] logs;
-        /// Garden's storage slots written, in order.
+        /// Garden's storage slots written, in order, and the values they hold afterwards.
         bytes32[] writes;
+        bytes32[] values;
+        /// Everything Garden's views show afterwards but handles: every crystal, lobby and duel, and the counters.
+        bytes state;
         /// What the call cost, as its receipt would show.
         uint256 gas;
         FhevmHCUMeter hcu;
@@ -376,6 +379,23 @@ contract ArenaTest is GardenFixture {
         assertEq(uint8(garden.lobbyOf(lobbyId).status), uint8(Garden.LobbyStatus.Fought));
     }
 
+    /// The longest timeout the constructor accepts, with the longest season, cannot overflow: cancelling is refused as
+    /// too early, never with a panic.
+    function testTheLongestTimeoutCannotOverflow() public {
+        Garden.Params memory params = _seasonZero();
+        params.seasonLength = type(uint256).max;
+        params.lobbyTimeout = type(uint256).max;
+        garden = new Garden(params);
+        uint256 a = _forge(alice);
+        _wait(1 days);
+        uint256 lobbyId = _openLobby(a, STAKE);
+        _wait(365 days);
+
+        vm.expectRevert(Garden.TooEarlyToCancel.selector);
+        vm.prank(alice);
+        garden.cancelLobby(lobbyId);
+    }
+
     // -- Stakes and forfeits --------------------------------------------------------------------------------
 
     /// RULES.md §7, Stakes and forfeits: a creator that cannot cover the stake loses, even with the element that wins,
@@ -621,12 +641,13 @@ contract ArenaTest is GardenFixture {
     // -- What others see ------------------------------------------------------------------------------------
 
     /**
-     * RULES.md §7 and SEASON0.md §5: nobody can tell a challenger's forfeit from its defeat. Both branches run from the
-     * same state with the same public history: two crystals with 80 MANA each, Water's lobby at a stake of 40, then
+     * RULES.md §7 and SEASON0.md §5: from outside, a challenger's forfeit looks like its defeat. Both branches run from
+     * the same state with the same public history: two crystals with 80 MANA each, Water's lobby at a stake of 40, then
      * an attunement of the challenger's Fire crystal. Only the encrypted choice differs: a hold keeps its 80, and Fire
      * loses on the element; a rise spends 50, the 30 left cannot cover the stake, and Fire forfeits. Outside, the
-     * joins are the same: Garden's event, the storage slots written, every log with its emitter, signature, size and
-     * the accounts granted, the gas and the HCU.
+     * joins are the same: Garden's event, the storage slots written and the public values in them, every log with all
+     * its fields but handles, what every view shows afterwards, the gas and the HCU. The winner is not outside: its
+     * balance gains a stake after a defeat and nothing after a forfeit, as RULES.md §7 pays it.
      */
     function testAChallengersForfeitLooksLikeADefeat() public {
         (uint256 a, uint256 b) = _pair(WATER, 80, FIRE, 80);
@@ -680,6 +701,7 @@ contract ArenaTest is GardenFixture {
 
     /// Cancelling a lobby does not tell whether its creator had put up the stake: the MANA gets a new handle either
     /// way, and the call is the same from outside. A hold keeps 80 MANA and a rise leaves 30 before the lobby opens.
+    /// Only the creator sees the difference, in its own balance.
     function testACancelLooksTheSameWhetherTheStakeWasPutUp() public {
         uint256 a = _forge(alice);
         _wait(80 * SECONDS_PER_MANA);
@@ -692,6 +714,34 @@ contract ArenaTest is GardenFixture {
         assertEq(_balanceOf(a, aliceKey), 80 - LEVEL_COST + MANA_PER_DAY, "nothing to give back");
 
         _assertSameFromOutside(refunded, nothingBack);
+    }
+
+    /**
+     * The comparisons above are only worth what they compare: they mask handles and nothing else. Two joins at stakes
+     * of 40 and 41 emit the same events from Garden, since DuelFought does not carry the stake. The stake shows only
+     * in the executor's logs, encrypted as a plaintext and compared as a scalar, in the duel's storage and in its
+     * view, and the comparison sees each.
+     */
+    function testTheComparisonSeesAPublicDifference() public {
+        (uint256 a, uint256 b) = _pair(WATER, 80, FIRE, 80);
+        uint256 forged = vm.snapshotState();
+        _openLobby(a, STAKE);
+        Trace memory forty = _observe(bob, abi.encodeCall(Garden.joinLobby, (1, b)));
+        assertTrue(vm.revertToState(forged));
+        _openLobby(a, STAKE + 1);
+        Trace memory fortyOne = _observe(bob, abi.encodeCall(Garden.joinLobby, (1, b)));
+
+        assertEq(forty.writes, fortyOne.writes, "the same slots");
+        assertEq(forty.logs.length, fortyOne.logs.length, "as many logs");
+        uint256 differing;
+        for (uint256 i; i < forty.logs.length; i++) {
+            if (keccak256(abi.encode(forty.logs[i])) == keccak256(abi.encode(fortyOne.logs[i]))) continue;
+            differing++;
+            assertNotEq(forty.logs[i].emitter, address(garden), "Garden's events are the same");
+        }
+        assertGt(differing, 0, "the executor's logs show the stake");
+        assertNotEq(keccak256(abi.encode(forty.values)), keccak256(abi.encode(fortyOne.values)), "so does storage");
+        assertNotEq(keccak256(forty.state), keccak256(fortyOne.state), "and the duel's view");
     }
 
     // -- Helpers --------------------------------------------------------------------------------------------
@@ -782,15 +832,41 @@ contract ArenaTest is GardenFixture {
         t.gas = vm.lastCallGas().gasTotalUsed;
         t.hcu = lastHCU();
         (, t.writes) = vm.accesses(address(garden));
-        t.logs = vm.getRecordedLogs();
+        t.logs = _masked(vm.getRecordedLogs());
+        t.values = _maskedValues(t.writes);
+        t.state = _publicState();
         // An empty trace would match any other: these comparisons are only worth what they compare.
         assertGt(t.logs.length, 0, "logs");
         assertGt(t.writes.length, 0, "writes");
         assertGt(t.hcu.transaction, 0, "HCU");
     }
 
-    function _assertSameFromOutside(Trace memory a, Trace memory b) internal view {
+    /// Everything Garden's views show but handles: each crystal's public fields, each lobby and duel, the counters.
+    function _publicState() internal view returns (bytes memory state) {
+        state = abi.encode(garden.totalSupply(), garden.lastTokenId(), garden.lastLobbyId(), garden.lastDuelId());
+        for (uint256 id = 1; id <= garden.lastTokenId(); id++) {
+            // A shattered crystal has no view left, only its record.
+            try garden.crystalOf(id) returns (Garden.CrystalView memory c) {
+                state = abi.encode(state, c.owner, c.lastAccrual, c.pendingMana, c.openLobby, c.wins, c.losses);
+            } catch {
+                (uint32 wins, uint32 losses) = garden.recordOf(id);
+                state = abi.encode(state, wins, losses);
+            }
+        }
+        for (uint256 id = 1; id <= garden.lastLobbyId(); id++) {
+            Garden.Lobby memory l = garden.lobbyOf(id);
+            state = abi.encode(state, l.crystal, l.stake, l.openedAt, l.status);
+        }
+        for (uint256 id = 1; id <= garden.lastDuelId(); id++) {
+            Garden.Duel memory d = garden.duelOf(id);
+            state = abi.encode(state, d.creatorCrystal, d.challengerCrystal, d.season, d.stake, d.published);
+        }
+    }
+
+    function _assertSameFromOutside(Trace memory a, Trace memory b) internal pure {
         assertEq(a.writes, b.writes, "storage slots written");
+        assertEq(a.values, b.values, "values written, handles masked");
+        assertEq(a.state, b.state, "what the views show");
         assertEq(a.gas, b.gas, "gas");
         assertEq(a.hcu.transaction, b.hcu.transaction, "HCU per transaction");
         assertEq(a.hcu.maxHandle, b.hcu.maxHandle, "HCU depth");
