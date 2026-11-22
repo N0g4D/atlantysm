@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {ebool, euint8, euint64} from "@fhevm/solidity/lib/FHE.sol";
+import {ebool, euint8, euint64, externalEbool} from "@fhevm/solidity/lib/FHE.sol";
 import {TestFhevm} from "@fhevm/forge/TestFhevm.sol";
 import {Vm} from "forge-std/Vm.sol";
 import {Garden} from "../../src/Garden.sol";
@@ -16,6 +16,9 @@ abstract contract GardenFixture is TestFhevm {
     uint256 internal constant SEASON_LENGTH = 3 days;
     /// A day over 100 MANA.
     uint64 internal constant SECONDS_PER_MANA = 864;
+    /// A rise from level L costs 50 × L² MANA, up to level 10.
+    uint64 internal constant LEVEL_COST = 50;
+    uint8 internal constant MAX_LEVEL = 10;
 
     uint8 internal constant FIRE = 0;
     uint8 internal constant EARTH = 1;
@@ -58,7 +61,13 @@ abstract contract GardenFixture is TestFhevm {
     }
 
     function _seasonZero() internal pure returns (Garden.Params memory) {
-        return Garden.Params({charge: CHARGE, manaPerDay: MANA_PER_DAY, seasonLength: SEASON_LENGTH});
+        return Garden.Params({
+            charge: CHARGE,
+            manaPerDay: MANA_PER_DAY,
+            seasonLength: SEASON_LENGTH,
+            levelCost: LEVEL_COST,
+            maxLevel: MAX_LEVEL
+        });
     }
 
     function _forge(address forger) internal returns (uint256 tokenId) {
@@ -69,6 +78,25 @@ abstract contract GardenFixture is TestFhevm {
     function _shatter(address owner, uint256 tokenId) internal {
         vm.prank(owner);
         garden.shatter(tokenId);
+    }
+
+    /// The owner attunes with a choice encrypted for Garden and the owner, as the owner's client would send it.
+    function _attune(address owner, uint256 tokenId, bool rise) internal {
+        (externalEbool choice, bytes memory proof) = encryptBool(rise, address(garden), owner);
+        vm.prank(owner);
+        garden.attune(tokenId, choice, proof);
+    }
+
+    /// The same encryption, for the conservation handler, which is not a test contract.
+    function encryptChoice(bool rise, address owner) external returns (externalEbool, bytes memory) {
+        return encryptBool(rise, address(garden), owner);
+    }
+
+    /// What a season's pot holds, read with `plaintextOf` since nobody can decrypt it. 0 for a pot that never
+    /// received MANA, whose handle is still empty.
+    function _pot(uint256 season) internal returns (uint64) {
+        euint64 pot = garden.potOf(season);
+        return euint64.unwrap(pot) == 0 ? 0 : plaintextOf(pot);
     }
 
     /// Moves time and the block together, as on chain.

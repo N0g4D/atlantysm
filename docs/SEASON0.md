@@ -105,17 +105,27 @@ level   = asEuint8(or(zero, 1))                   // level 1 and no MANA are pub
 mana    = asEuint64(zero)                         // come from the draw (Handles, above)
 ```
 
-**Attune** `(tokenId, externalEbool rise, bytes proof)` — owner only.
+**Attune** `(tokenId, externalEbool rise, bytes proof)` — owner only, with a proof that is not empty. Accrue first.
 
 ```
 r     = fromExternal(rise, proof)
-cost  = mul(asEuint64(mul(level, level)), LEVEL_COST)   // level ≤ 10, so level² fits in euint8
-doIt  = and(and(r, ge(mana, cost)), lt(level, MAX_LEVEL))
+cost  = mul(asEuint64(mul(level, level)), LEVEL_COST)   // level ≤ MAX_LEVEL ≤ 15, so level² fits in euint8
+doIt  = and(and(r, lt(level, MAX_LEVEL)), ge(mana, cost))  // the MANA check waits on the cost, so it comes last
 level = select(doIt, add(level, 1), level)
 spent = select(doIt, cost, asEuint64(0))
 mana  = sub(mana, spent)
-pot[currentSeason] = add(pot[currentSeason], spent)
+pot[currentSeason] = add(pot[currentSeason], spent)    // an empty pot starts from GARDEN_ZERO
 ```
+
+- **The proof.** With an empty proof, `fromExternal` takes any `ebool` that the caller and Garden are allowed on, and
+  turns the zero handle into an encrypted plaintext `false`. Either way the choice could be public, a hold that anyone
+  reads in the calldata. Garden refuses an empty proof, so every choice it accepts was encrypted by the owner's client.
+- **New handles every time.** On a hold or a refused rise, `spent` is an encrypted 0, so the level, the MANA and the
+  pot get new handles whatever happened. An unchanged handle would tell everyone that nothing had changed.
+- **Who can recompute.** Importing the input leaves the caller allowed on `r` until the transaction ends. A contract
+  that owns a crystal can therefore recompute the new level and MANA in that transaction, and they are its own. It
+  cannot recompute the pot, because it never holds the pot that `spent` was added to, nor `GARDEN_ZERO` when the pot
+  is empty.
 
 **Open a lobby** `(tokenId, uint64 stake)` — owner only, the crystal not already waiting, and
 `MIN_STAKE <= stake <= MAX_STAKE` (`RULES.md` §7). The stake and its bounds are public, so the check reveals nothing.
@@ -234,13 +244,18 @@ Refined so far:
     - `totalSupply()` is the number of live crystals, and `lastTokenId()` the id of the latest one forged.
     - `currentSeason()`.
     - `potOf(season)` is the handle of a season's pot, which nobody can decrypt.
+- **T04.**
+  - **Construction.** `Params` gains `levelCost` and `maxLevel`, readable as `LEVEL_COST` and `MAX_LEVEL`. The
+    constructor refuses a zero cost, a maximum below 2 or above 15 (the level is squared in a `euint8`), and a cost
+    whose highest value, `levelCost × maxLevel²`, does not fit in 64 bits.
+  - **`attune`** reverts with `MissingProof` when the proof is empty (§2.2).
 
 ### 2.5 Events
 
 `Forged(tokenId, owner)`, `Shattered(tokenId)`, `Attuned(tokenId)`, `LobbyOpened(lobbyId, tokenId, stake)`,
 `LobbyCancelled(lobbyId)`, `DuelFought(duelId, lobbyId, creatorCrystal, challengerCrystal, season)`,
 `DuelPublished(duelId, winner, loser)`, `SeasonClosed(season, first, second, third)`. `Forged` indexes the token id
-and the owner, and `Shattered` the token id, so the app can filter them.
+and the owner, and `Shattered` and `Attuned` the token id, so the app can filter them.
 
 ### 2.6 HCU budget
 
@@ -252,19 +267,27 @@ grants survive; `setUp` runs as a transaction of its own, like an earlier transa
 |---|---|---|
 | `forge` | 664,096 | 603,032 |
 | `shatter` | 295,000 | 295,000 |
-| `attune` | | |
+| `attune` | 1,420,064 | 909,032 |
 | `openLobby` | 466,064 | 466,000 |
 | `joinLobby` | 2,259,064 | 906,000 |
 | `closeSeason` | | |
 | transfer | | |
 
-`forge` and `shatter` are measured on `Garden` (`packages/garden/test/Hcu.t.sol`). Deploying costs 58,000 HCU, for
-`GARDEN_ZERO`.
+`forge`, `shatter` and `attune` are measured on `Garden` (`packages/garden/test/Hcu.t.sol`). Deploying costs 58,000
+HCU, for `GARDEN_ZERO`.
 - **`forge`.** Most of it is the element: `randEuint16` costs 23,000, the scalar `rem` on `euint16` 580,000, and
   the cast to `euint8` 32. The zero for the level and MANA is the scalar `and` and `or` on `euint16` (61,000
   together) plus two casts of 32. It runs beside the `rem`, so it adds nothing to the depth.
 - **`shatter`.** It makes two additions in a chain: the accrual's scalar `add` (133,000), then the `add` into the pot
   (162,000). An empty pot starts from `GARDEN_ZERO`, so a season's first shatter costs the same as the others.
+- **`attune`.** The longest chain is the cost, then the decision, then the payment:
+  - the cost: `mul` on `euint8` (150,000), a cast (32), and the scalar `mul` on `euint64` (365,000), the most
+    expensive operation;
+  - then `ge` (152,000), one `and` (25,000) and `select` (55,000);
+  - then the `sub` from the MANA or the `add` into the pot (162,000 each).
+
+  Beside it run the accrual (133,000), `lt` (52,000), the other `and`, and the level's scalar `add` (84,000) and
+  `select`. A rise, a refused rise and a hold run the same operations, at the same cost.
 
 `openLobby` and `joinLobby` were measured on the T02 spike (`packages/garden/test/spike/`); T05 measures them again
 on `Garden`. In `joinLobby` the triangle's scalar `rem` is the most expensive operation, 440,000 HCU, and it lies on
@@ -272,7 +295,10 @@ the longest chain: `add`, `rem`, `eq`, three `select`, then the payout `add`.
 
 ## 3. Toolchain
 
-- **Solidity:** solc 0.8.24, EVM `cancun`; Foundry 1.7.1, pinned in CI.
+- **Solidity:** solc 0.8.24, EVM `cancun`, the optimizer on at 200 runs; Foundry 1.7.1, pinned in CI.
+  - Every FHE call inlines its checks. At T04, `Garden` is 11,368 bytes with the optimizer and would be 19,501
+    without it, of the 24,576 allowed.
+  - Verification on Etherscan (T09) must use the same settings.
 - **Contract packages:** `@fhevm/solidity` ^0.13.4, `encrypted-types` ^0.0.4 (which `FHE.sol` imports, so every
   contract needs it to compile) and `@openzeppelin/contracts` ^5.
 - **Test packages:** `@fhevm/forge` ^0.13.1 (tests inherit `TestFhevm`) and `forge-std` v1.11.0, the tag that

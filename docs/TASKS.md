@@ -35,7 +35,7 @@ request ticks its task here.
 - [x] **T03 · Crystals.** ERC-721, `forge`, `shatter` and MANA accrual.
   *Done when* the tests cover `RULES.md` §4–5, ETH conservation, a stranger failing to decrypt, and the spread of
   elements over 300 forges.
-- [ ] **T04 · The Sanctuary.** `attune` with the encrypted *rise* or *hold*, costs, the maximum level, and spent MANA
+- [x] **T04 · The Sanctuary.** `attune` with the encrypted *rise* or *hold*, costs, the maximum level, and spent MANA
   flowing into the season's pot.
   *Done when* the tests cover `RULES.md` §6, including that a rise, a refused rise and a hold look the same from
   outside.

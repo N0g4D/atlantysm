@@ -7,3 +7,7 @@ libs = []
 solc_version = "0.8.24"
 # The FHEVM contracts require cancun.
 evm_version = "cancun"
+# Every FHE library call inlines its checks, so without the optimizer Garden would outgrow the 24,576-byte limit
+# before the Arena and the seasons are in (SEASON0.md §3). Etherscan verification must use these same settings.
+optimizer = true
+optimizer_runs = 200

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {FHE, euint8, euint16, euint64} from "@fhevm/solidity/lib/FHE.sol";
+import {FHE, ebool, euint8, euint16, euint64, externalEbool} from "@fhevm/solidity/lib/FHE.sol";
 import {ZamaEthereumConfig} from "@fhevm/solidity/config/ZamaConfig.sol";
 import {ERC721} from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
@@ -27,6 +27,10 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
         uint64 manaPerDay;
         /// How long a season lasts, in seconds.
         uint256 seasonLength;
+        /// A rise from level L to L + 1 costs `levelCost × L²` MANA.
+        uint64 levelCost;
+        /// The highest level a crystal can reach.
+        uint8 maxLevel;
     }
 
     /// SEASON0.md §2.1. A crystal's handles are granted to this contract and to its owner only.
@@ -54,6 +58,9 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
     /// Accrual counts whole MANA, one every SECONDS_PER_MANA.
     uint64 public immutable SECONDS_PER_MANA;
     uint256 public immutable SEASON_LENGTH;
+    /// A rise from level L to L + 1 costs LEVEL_COST × L² MANA (RULES.md §6).
+    uint64 public immutable LEVEL_COST;
+    uint8 public immutable MAX_LEVEL;
     /// The deployment time, when season 1 starts.
     uint256 public immutable GENESIS;
     /// An encrypted zero that only this contract holds, drawn at construction. A value that must be unreachable starts
@@ -72,21 +79,31 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
     // Public data only (SEASON0.md §2.3, rule 2).
     event Forged(uint256 indexed tokenId, address indexed owner);
     event Shattered(uint256 indexed tokenId);
+    /// The same for a rise, a refused rise and a hold (RULES.md §6).
+    event Attuned(uint256 indexed tokenId);
 
     error InvalidParams();
     error WrongCharge();
     error NotOwner();
     error ChargeNotReturned();
     error TransfersNotOpen();
+    error MissingProof();
 
     constructor(Params memory params) ERC721("Atlantysm Crystal", "CRYSTAL") {
         // Accrual credits one MANA every SECONDS_PER_MANA, so a day must divide into whole steps (SEASON0.md §2.2).
         bool wholeSteps = params.manaPerDay != 0 && 1 days % params.manaPerDay == 0;
-        if (params.charge == 0 || !wholeSteps || params.seasonLength == 0) revert InvalidParams();
+        // A crystal is born at level 1, so the maximum must leave a level to rise to, and a rise must cost something.
+        // `attune` squares the level in a euint8, which holds 15² = 225 but not 16². And the cost it computes, up to
+        // levelCost × maxLevel², must fit in a euint64, where it would wrap silently.
+        bool levels = params.maxLevel >= 2 && params.maxLevel <= 15 && params.levelCost != 0
+            && uint256(params.levelCost) * params.maxLevel * params.maxLevel <= type(uint64).max;
+        if (params.charge == 0 || !wholeSteps || params.seasonLength == 0 || !levels) revert InvalidParams();
         CHARGE = params.charge;
         MANA_PER_DAY = params.manaPerDay;
         SECONDS_PER_MANA = uint64(1 days / params.manaPerDay);
         SEASON_LENGTH = params.seasonLength;
+        LEVEL_COST = params.levelCost;
+        MAX_LEVEL = params.maxLevel;
         GENESIS = block.timestamp;
         // Zero, whatever the draw. Nobody else is ever allowed on the draw, so nobody else can reproduce the handle.
         GARDEN_ZERO = FHE.allowThis(FHE.and(FHE.randEuint64(), 0));
@@ -138,6 +155,46 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
         // Last, after every effect (SEASON0.md §2.3, rule 6). RULES.md §3, invariant 1: the charge always returns.
         (bool sent,) = msg.sender.call{value: CHARGE}("");
         if (!sent) revert ChargeNotReturned();
+    }
+
+    // -- The Sanctuary (RULES.md §6) ---------------------------------------------------------------------------
+
+    /**
+     * @notice Attunes the sender's crystal with an encrypted choice, rise or hold. On a rise that its MANA covers,
+     *         below MAX_LEVEL, the crystal pays LEVEL_COST × level² MANA into the centre and rises one level.
+     *         Otherwise nothing changes. A rise, a refused rise and a hold look the same from outside.
+     * @param rise  `true` to rise, encrypted by the owner's client for this contract and the sender.
+     * @param proof The input's proof, which must not be empty.
+     */
+    function attune(uint256 tokenId, externalEbool rise, bytes calldata proof) external {
+        // `ownerOf` reverts for a crystal that was never forged or is already shattered.
+        address owner = ownerOf(tokenId);
+        if (owner != msg.sender) revert NotOwner();
+        // With an empty proof, `FHE.fromExternal` takes any ebool that the sender and this contract are allowed on,
+        // and the zero handle as an encrypted plaintext `false`. Either way the choice could be public, a hold that
+        // anyone reads in the calldata. With a proof, it was encrypted by the owner's client, and only this contract
+        // can import it. The calldata is public, so the check reads no secret.
+        if (proof.length == 0) revert MissingProof();
+
+        Crystal storage crystal = _crystals[tokenId];
+        euint64 mana = _accrue(crystal);
+        euint8 level = crystal.level;
+        // The level never exceeds MAX_LEVEL, at most 15, so its square fits in a euint8. The constructor keeps the
+        // cost within a euint64.
+        euint64 cost = FHE.mul(FHE.asEuint64(FHE.mul(level, level)), LEVEL_COST);
+        // Every operation runs whatever the secrets are, and `select` keeps one side (SEASON0.md §2.3, rule 1). The
+        // MANA check goes last because it waits on the cost, so only one `and` follows the cost.
+        ebool rises = FHE.and(FHE.and(FHE.fromExternal(rise, proof), FHE.lt(level, MAX_LEVEL)), FHE.ge(mana, cost));
+        // On a hold or a refused rise, `spent` is an encrypted 0 and the level keeps its value. Every value stored below
+        // still gets a new handle: an unchanged handle would tell everyone that nothing had changed.
+        euint64 spent = FHE.select(rises, cost, FHE.asEuint64(0));
+
+        crystal.level = _seal(FHE.select(rises, FHE.add(level, 1), level), owner);
+        crystal.mana = _seal(FHE.sub(mana, spent), owner);
+        // RULES.md §3, invariant 5: what a rise spends goes to the centre, into the pot of the season in progress.
+        uint256 season = currentSeason();
+        _pots[season] = FHE.allowThis(FHE.add(_potOf(season), spent));
+        emit Attuned(tokenId);
     }
 
     // -- Views -------------------------------------------------------------------------------------------------

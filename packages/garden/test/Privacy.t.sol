@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {FHE, euint8, euint64} from "@fhevm/solidity/lib/FHE.sol";
+import {FHE, ebool, euint8, euint64, externalEbool} from "@fhevm/solidity/lib/FHE.sol";
 import {ZamaEthereumConfig} from "@fhevm/solidity/config/ZamaConfig.sol";
 import {Vm} from "forge-std/Vm.sol";
 import {Garden} from "../src/Garden.sol";
@@ -25,6 +25,38 @@ contract Mimic is ZamaEthereumConfig {
 contract PotRecomputer is ZamaEthereumConfig {
     function recompute(euint64 mana, uint64 accrued, address to) external returns (euint64 pot) {
         pot = FHE.allow(FHE.add(euint64.wrap(0), FHE.add(mana, accrued)), to);
+    }
+}
+
+/**
+ * @dev A contract that owns a crystal. It attunes it, then in the same transaction recomputes what `attune` computed,
+ *      from the handles it holds: the crystal's, as its owner, and the choice, which importing the input left it
+ *      allowed on until the transaction ends.
+ */
+contract AttuneRecomputer is ZamaEthereumConfig {
+    function forge(Garden garden) external payable returns (uint256) {
+        return garden.forge{value: msg.value}();
+    }
+
+    /// Returns the crystal's new MANA and what the season's first pot would be if it started from an encrypted
+    /// plaintext 0, granted to `to`.
+    function attuneAndRecompute(Garden garden, uint256 tokenId, externalEbool rise, bytes calldata proof, address to)
+        external
+        returns (euint64 mana, euint64 pot)
+    {
+        Garden.CrystalView memory before = garden.crystalOf(tokenId);
+        garden.attune(tokenId, rise, proof);
+
+        euint64 credited = FHE.add(before.mana, before.pendingMana);
+        euint64 spent = _spent(garden, before.level, credited, ebool.wrap(externalEbool.unwrap(rise)));
+        mana = FHE.sub(credited, spent);
+        pot = FHE.allow(FHE.add(FHE.asEuint64(0), spent), to);
+    }
+
+    function _spent(Garden garden, euint8 level, euint64 credited, ebool choice) internal returns (euint64) {
+        euint64 cost = FHE.mul(FHE.asEuint64(FHE.mul(level, level)), garden.LEVEL_COST());
+        ebool rises = FHE.and(FHE.and(choice, FHE.lt(level, garden.MAX_LEVEL())), FHE.ge(credited, cost));
+        return FHE.select(rises, cost, FHE.asEuint64(0));
     }
 }
 
@@ -150,5 +182,95 @@ contract PrivacyTest is GardenFixture {
         assertEq(plaintextOf(recomputed), plaintextOf(pot), "the same value");
         assertNotEq(euint64.unwrap(recomputed), euint64.unwrap(pot), "another handle");
         _assertCannotDecrypt(pot, alice, aliceKey);
+    }
+
+    // -- Attunement -----------------------------------------------------------------------------------------
+
+    /// RULES.md §6 and §9: what an attunement did, only its owner can read. Read from the ACL's events, attuning
+    /// grants the new level and MANA to the contract and the owner, the pot to the contract alone, and the credited
+    /// balance, as accrual keeps it, to the contract. Nothing becomes publicly decryptable.
+    function testAttuningGrantsTheNewValuesToTheOwnerOnly() public {
+        uint256 tokenId = _forge(alice);
+        _wait(1 days);
+        (externalEbool choice, bytes memory proof) = encryptBool(true, address(garden), alice);
+
+        vm.recordLogs();
+        vm.prank(alice);
+        garden.attune(tokenId, choice, proof);
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        _assertNothingPublic(logs);
+
+        Garden.CrystalView memory crystal = garden.crystalOf(tokenId);
+        euint64 pot = garden.potOf(1);
+        // The credit is the first grant. Its handle is no longer stored, so it is checked by its value.
+        bytes32 credit = _assertGrantsOnlyTo(_firstGrant(logs), address(garden))[0];
+        assertEq(plaintextOf(euint64.wrap(credit)), MANA_PER_DAY, "the credited balance");
+
+        Grant[] memory grants = new Grant[](6);
+        grants[0] = Grant(address(garden), credit);
+        grants[1] = _grant(address(garden), crystal.level);
+        grants[2] = _grant(alice, crystal.level);
+        grants[3] = _grant(address(garden), crystal.mana);
+        grants[4] = _grant(alice, crystal.mana);
+        grants[5] = _grant(address(garden), pot);
+        _assertGrants(logs, grants);
+    }
+
+    /// RULES.md §6 and §9: after an attunement nobody else can read the crystal's level or MANA, and nobody at all,
+    /// not even the owner who paid into it, can read the centre.
+    function testNobodyElseCanReadAnAttunedCrystalOrTheCentre() public {
+        uint256 tokenId = _forge(alice);
+        _forge(bob);
+        _wait(1 days);
+        _attune(alice, tokenId, true);
+
+        Garden.CrystalView memory crystal = garden.crystalOf(tokenId);
+        assertEq(decrypt(crystal.level, address(garden), aliceKey), 2, "the owner reads the level");
+        assertEq(decrypt(crystal.mana, address(garden), aliceKey), MANA_PER_DAY - LEVEL_COST, "and the MANA");
+        _assertCannotDecrypt(crystal.level, bob, bobKey);
+        _assertCannotDecrypt(crystal.mana, bob, bobKey);
+        _assertCannotDecrypt(crystal.level, stranger, strangerKey);
+        _assertCannotDecrypt(crystal.mana, stranger, strangerKey);
+        _assertNotPublic(crystal.level);
+        _assertNotPublic(crystal.mana);
+
+        euint64 pot = garden.potOf(1);
+        _assertCannotDecrypt(pot, alice, aliceKey);
+        _assertCannotDecrypt(pot, bob, bobKey);
+        _assertNotPublic(pot);
+    }
+
+    /// SEASON0.md §2.2, Handles: an owner can recompute what attune computed, because it holds the crystal's handles
+    /// and, until the transaction ends, the choice. A contract that owns a crystal can do it in the same transaction.
+    /// It gets the crystal's new MANA, which it may read anyway, but not the centre: a season's first pot starts from
+    /// the contract's own zero.
+    function testAnAttunerCannotRecomputeTheCentre() public {
+        AttuneRecomputer recomputer = new AttuneRecomputer();
+        uint256 tokenId = recomputer.forge{value: CHARGE}(garden);
+        _wait(1 days);
+        (externalEbool choice, bytes memory proof) = encryptBool(true, address(garden), address(recomputer));
+
+        (euint64 mana, euint64 recomputed) = recomputer.attuneAndRecompute(garden, tokenId, choice, proof, alice);
+
+        assertEq(euint64.unwrap(mana), euint64.unwrap(garden.crystalOf(tokenId).mana), "the recomputation is exact");
+        euint64 pot = garden.potOf(1);
+        assertEq(plaintextOf(recomputed), LEVEL_COST, "the cost of the rise");
+        assertEq(plaintextOf(pot), LEVEL_COST, "the same value");
+        assertNotEq(euint64.unwrap(recomputed), euint64.unwrap(pot), "another handle");
+        _assertCannotDecrypt(pot, alice, aliceKey);
+    }
+
+    /// The logs up to and including the first ACL grant.
+    function _firstGrant(Vm.Log[] memory logs) internal view returns (Vm.Log[] memory first) {
+        address acl = getCoprocessorConfig(address(garden)).ACLAddress;
+        for (uint256 i; i < logs.length; i++) {
+            if (logs[i].emitter == acl && logs[i].topics.length > 0 && logs[i].topics[0] == ACL_ALLOWED) {
+                first = new Vm.Log[](i + 1);
+                for (uint256 j; j <= i; j++) {
+                    first[j] = logs[j];
+                }
+                return first;
+            }
+        }
     }
 }
