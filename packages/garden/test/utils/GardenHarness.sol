@@ -4,10 +4,10 @@ pragma solidity ^0.8.24;
 import {Garden} from "../../src/Garden.sol";
 
 /**
- * @dev Test only. Accrual credits a crystal when it acts, and in T03 the only action is shattering, which leaves
- *      nothing to observe afterwards. `act` stands in for the actions to come (attune, the Arena), so that the
- *      tests can watch the credited balance and the remainder that waits for the next call. Once T04 and T05 bring
- *      the real actions, the tests should move to them and this harness should go.
+ * @dev Test only. Accrual credits a crystal when it acts. `act` credits it and does nothing else, so that the MANA
+ *      tests can watch the credited balance and the remainder that waits for the next call. `actTwice` and
+ *      `actWithoutSealing` are careless actions that no real function takes. The conservation handler attunes since
+ *      T04. When T05 brings the Arena, the MANA tests should move to the real actions and this harness should go.
  */
 contract GardenHarness is Garden {
     constructor(Params memory params) Garden(params) {}

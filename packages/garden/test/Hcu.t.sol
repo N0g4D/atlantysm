@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+import {externalEbool} from "@fhevm/solidity/lib/FHE.sol";
 import {FhevmHCUMeter} from "@fhevm/forge/FhevmVm.sol";
 import {Garden} from "../src/Garden.sol";
 import {GardenFixture} from "./utils/GardenFixture.sol";
@@ -14,6 +15,8 @@ contract HcuTest is GardenFixture {
     uint256 internal constant HCU_DEPTH_BUDGET = 5_000_000 / 2;
 
     uint256 internal crystal;
+    externalEbool internal rise;
+    bytes internal riseProof;
 
     /**
      * @dev Everything a measured call reads is made here. A forge test is one transaction, so a handle made in the
@@ -23,8 +26,9 @@ contract HcuTest is GardenFixture {
     function setUp() public override {
         super.setUp();
         crystal = _forge(alice);
-        // A day later, so that shattering credits real MANA.
+        // A day later, so that shattering credits real MANA, and a rise is paid for.
         _wait(1 days);
+        (rise, riseProof) = encryptBool(true, address(garden), alice);
     }
 
     function testForgingStaysUnderHalfOfEachCap() public {
@@ -39,6 +43,15 @@ contract HcuTest is GardenFixture {
         resetHCU();
         _shatter(alice, crystal);
         _assertWithinBudget("shatter", lastHCU());
+    }
+
+    /// A rise, a refused rise and a hold run the same operations (Sanctuary.t.sol shows the HCU is equal), so one
+    /// rise measures them all. The season's pot is empty and starts from GARDEN_ZERO, at the same cost.
+    function testAttuningStaysUnderHalfOfEachCap() public {
+        resetHCU();
+        vm.prank(alice);
+        garden.attune(crystal, rise, riseProof);
+        _assertWithinBudget("attune", lastHCU());
     }
 
     /// Not an external function, but a transaction with FHE work: the constructor draws GARDEN_ZERO.

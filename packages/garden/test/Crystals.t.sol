@@ -307,6 +307,8 @@ contract CrystalsTest is GardenFixture {
         assertEq(garden.MANA_PER_DAY(), MANA_PER_DAY);
         assertEq(garden.SECONDS_PER_MANA(), SECONDS_PER_MANA);
         assertEq(garden.SEASON_LENGTH(), SEASON_LENGTH);
+        assertEq(garden.LEVEL_COST(), LEVEL_COST);
+        assertEq(garden.MAX_LEVEL(), MAX_LEVEL);
         assertEq(garden.GENESIS(), block.timestamp);
         assertEq(garden.currentSeason(), 1);
     }
@@ -334,6 +336,33 @@ contract CrystalsTest is GardenFixture {
         assertEq(new Garden(params).SECONDS_PER_MANA(), 1);
         params.manaPerDay = 1;
         assertEq(new Garden(params).SECONDS_PER_MANA(), 1 days);
+    }
+
+    /// The constructor refuses levels `attune` cannot compute: a free rise, a maximum that leaves no level above the
+    /// first, a maximum whose square does not fit in the euint8 that holds the level, and a cost that would wrap in
+    /// its euint64. Each bound is checked from both sides.
+    function testTheConstructorRefusesUnusableLevels() public {
+        Garden.Params memory params = _seasonZero();
+        params.levelCost = 0;
+        _assertRefused(params);
+
+        uint8[4] memory refused = [uint8(0), 1, 16, type(uint8).max];
+        for (uint256 i; i < refused.length; i++) {
+            params = _seasonZero();
+            params.maxLevel = refused[i];
+            _assertRefused(params);
+        }
+
+        params = _seasonZero();
+        params.maxLevel = 2;
+        assertEq(new Garden(params).MAX_LEVEL(), 2);
+
+        // 15² = 225: the highest cost a maximum of 15 can compute must fit in 64 bits.
+        params.maxLevel = 15;
+        params.levelCost = type(uint64).max / 225;
+        assertEq(new Garden(params).LEVEL_COST(), type(uint64).max / 225);
+        params.levelCost++;
+        _assertRefused(params);
     }
 
     // -- Helpers --------------------------------------------------------------------------------------------
