@@ -75,6 +75,9 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
     mapping(uint256 tokenId => Crystal) internal _crystals;
     /// The centre (RULES.md §8), one pot per season. Only this contract can use a pot: nobody may read its total.
     mapping(uint256 season => euint64) internal _pots;
+    /// Every input handle `attune` has accepted. A handle sits in the calldata, so the same one twice would show
+    /// everyone that two attunements made the same choice.
+    mapping(bytes32 inputHandle => bool) internal _usedChoices;
 
     // Public data only (SEASON0.md §2.3, rule 2).
     event Forged(uint256 indexed tokenId, address indexed owner);
@@ -88,13 +91,15 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
     error ChargeNotReturned();
     error TransfersNotOpen();
     error MissingProof();
+    error ChoiceReused();
 
     constructor(Params memory params) ERC721("Atlantysm Crystal", "CRYSTAL") {
         // Accrual credits one MANA every SECONDS_PER_MANA, so a day must divide into whole steps (SEASON0.md §2.2).
         bool wholeSteps = params.manaPerDay != 0 && 1 days % params.manaPerDay == 0;
         // A crystal is born at level 1, so the maximum must leave a level to rise to, and a rise must cost something.
-        // `attune` squares the level in a euint8, which holds 15² = 225 but not 16². And the cost it computes, up to
-        // levelCost × maxLevel², must fit in a euint64, where it would wrap silently.
+        // Every value `attune` computes stays exact: it squares the level in a euint8, which holds 15² = 225 but not
+        // 16², and the cost, up to levelCost × maxLevel², must fit in its euint64. A rise is paid only below the
+        // maximum, so a wrap at the maximum itself would do no harm, but exact values are simpler to check.
         bool levels = params.maxLevel >= 2 && params.maxLevel <= 15 && params.levelCost != 0
             && uint256(params.levelCost) * params.maxLevel * params.maxLevel <= type(uint64).max;
         if (params.charge == 0 || !wholeSteps || params.seasonLength == 0 || !levels) revert InvalidParams();
@@ -163,18 +168,23 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
      * @notice Attunes the sender's crystal with an encrypted choice, rise or hold. On a rise that its MANA covers,
      *         below MAX_LEVEL, the crystal pays LEVEL_COST × level² MANA into the centre and rises one level.
      *         Otherwise nothing changes. A rise, a refused rise and a hold look the same from outside.
-     * @param rise  `true` to rise, encrypted by the owner's client for this contract and the sender.
+     * @param rise  `true` to rise, encrypted for this contract and the sender. Each input serves one attunement.
      * @param proof The input's proof, which must not be empty.
      */
     function attune(uint256 tokenId, externalEbool rise, bytes calldata proof) external {
         // `ownerOf` reverts for a crystal that was never forged or is already shattered.
         address owner = ownerOf(tokenId);
         if (owner != msg.sender) revert NotOwner();
-        // With an empty proof, `FHE.fromExternal` takes any ebool that the sender and this contract are allowed on,
-        // and the zero handle as an encrypted plaintext `false`. Either way the choice could be public, a hold that
-        // anyone reads in the calldata. With a proof, it was encrypted by the owner's client, and only this contract
-        // can import it. The calldata is public, so the check reads no secret.
+        // Only the owner may know the choice (RULES.md §6). With an empty proof, `FHE.fromExternal` would take the
+        // zero handle as an encrypted plaintext `false`, a hold that anyone reads in the calldata, or any ebool that
+        // the sender and this contract may use, whose value can be public too. With a proof, the input was encrypted
+        // for this contract and for the owner, who submits it.
         if (proof.length == 0) revert MissingProof();
+        // The handle sits in the calldata. Used twice, it would show everyone that two attunements made the same
+        // choice, so each attunement takes a fresh encryption. Both checks read public calldata only.
+        bytes32 input = externalEbool.unwrap(rise);
+        if (_usedChoices[input]) revert ChoiceReused();
+        _usedChoices[input] = true;
 
         Crystal storage crystal = _crystals[tokenId];
         euint64 mana = _accrue(crystal);
@@ -249,7 +259,7 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
         return (block.timestamp - GENESIS) / SEASON_LENGTH + 1;
     }
 
-    /// The handle of a season's pot, 0 until the pot receives MANA. Nobody can decrypt it.
+    /// The handle of a season's pot, 0 until a crystal attunes or is shattered in that season. Nobody can decrypt it.
     function potOf(uint256 season) external view returns (euint64) {
         return _pots[season];
     }

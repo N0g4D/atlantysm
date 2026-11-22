@@ -47,6 +47,7 @@ Per crystal (`tokenId`):
   `published` flag.
 - **Per season:** `pot` (`euint64`), wins and losses per crystal, the id of each crystal's latest counted win, the
   top three and a `closed` flag. Seasons are numbered from 1, and season 1 starts at the deployment.
+- **Choices used:** every input handle `attune` has accepted (§2.2, Attune).
 
 The contract's ETH balance always equals `CHARGE × live crystals`. `forge` is the only call that takes ETH: `Garden`
 has no `receive` or `fallback`. ETH that arrives without a call would sit on top, and nothing would ever move it. It
@@ -105,7 +106,8 @@ level   = asEuint8(or(zero, 1))                   // level 1 and no MANA are pub
 mana    = asEuint64(zero)                         // come from the draw (Handles, above)
 ```
 
-**Attune** `(tokenId, externalEbool rise, bytes proof)` — owner only, with a proof that is not empty. Accrue first.
+**Attune** `(tokenId, externalEbool rise, bytes proof)` — owner only, with a proof that is not empty and an input
+that has not been used before. Accrue first.
 
 ```
 r     = fromExternal(rise, proof)
@@ -117,9 +119,13 @@ mana  = sub(mana, spent)
 pot[currentSeason] = add(pot[currentSeason], spent)    // an empty pot starts from GARDEN_ZERO
 ```
 
-- **The proof.** With an empty proof, `fromExternal` takes any `ebool` that the caller and Garden are allowed on, and
-  turns the zero handle into an encrypted plaintext `false`. Either way the choice could be public, a hold that anyone
-  reads in the calldata. Garden refuses an empty proof, so every choice it accepts was encrypted by the owner's client.
+- **The proof.** With an empty proof, `fromExternal` turns the zero handle into an encrypted plaintext `false`, a hold
+  that anyone reads in the calldata. It also takes any `ebool` that the caller and Garden are allowed on, whose value
+  can be public too, such as a trivial encryption. Garden refuses an empty proof, so every choice it accepts was
+  encrypted for Garden and for the owner, who submits it.
+- **Once per input.** The input's handle sits in the calldata. Used twice, it would show everyone that two
+  attunements made the same choice. Garden records every handle it accepts and refuses it a second time, so each
+  attunement takes a fresh encryption. Both checks read public calldata only.
 - **New handles every time.** On a hold or a refused rise, `spent` is an encrypted 0, so the level, the MANA and the
   pot get new handles whatever happened. An unchanged handle would tell everyone that nothing had changed.
 - **Who can recompute.** Importing the input leaves the caller allowed on `r` until the transaction ends. A contract
@@ -248,7 +254,8 @@ Refined so far:
   - **Construction.** `Params` gains `levelCost` and `maxLevel`, readable as `LEVEL_COST` and `MAX_LEVEL`. The
     constructor refuses a zero cost, a maximum below 2 or above 15 (the level is squared in a `euint8`), and a cost
     whose highest value, `levelCost × maxLevel²`, does not fit in 64 bits.
-  - **`attune`** reverts with `MissingProof` when the proof is empty (§2.2).
+  - **`attune`** reverts with `MissingProof` when the proof is empty, and with `ChoiceReused` when the input was
+    already used (§2.2).
 
 ### 2.5 Events
 
@@ -326,7 +333,8 @@ the longest chain: `add`, `rem`, `eq`, three `select`, then the payout `add`.
   charges held, the current season and its countdown.
 - **Secrets on request.** A player's element, level and MANA are decrypted on a click, after the wallet signs a
   permit, never on page load. Everything decrypted is cleared when the account or chain changes.
-- **Inputs.** Encrypted inputs are made for `Garden` and the connected account, and sent unchanged.
+- **Inputs.** Encrypted inputs are made for `Garden` and the connected account, and sent unchanged with their proof.
+  Every attunement takes a fresh one: `attune` refuses an input it has already accepted.
 - **Waiting is a state.** A mined receipt does not mean a result is ready. Every write shows a pending state until
   the new values decrypt, and errors are shown, not swallowed.
 - **Publishing.** For a pending duel, the app fetches the public decryption and its proof through the SDK and

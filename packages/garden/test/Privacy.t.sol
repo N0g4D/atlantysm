@@ -7,9 +7,10 @@ import {Vm} from "forge-std/Vm.sol";
 import {Garden} from "../src/Garden.sol";
 import {GardenFixture} from "./utils/GardenFixture.sol";
 
-/// The ACL lets an account allowed on a handle allow another one.
-interface IAclAllow {
+/// The ACL lets an account allowed on a handle allow another one, and says who is allowed, for now or for good.
+interface IAcl {
     function allow(bytes32 handle, address account) external;
+    function isAllowed(bytes32 handle, address account) external view returns (bool);
 }
 
 /// Any contract: it encrypts the public facts a crystal is born with, and grants them to whoever it likes.
@@ -31,7 +32,8 @@ contract PotRecomputer is ZamaEthereumConfig {
 /**
  * @dev A contract that owns a crystal. It attunes it, then in the same transaction recomputes what `attune` computed,
  *      from the handles it holds: the crystal's, as its owner, and the choice, which importing the input left it
- *      allowed on until the transaction ends.
+ *      allowed on until the transaction ends. It repeats `attune` operation by operation, so a change to those
+ *      operations must be made here too: in another order they give other handles.
  */
 contract AttuneRecomputer is ZamaEthereumConfig {
     function forge(Garden garden) external payable returns (uint256) {
@@ -172,8 +174,7 @@ contract PrivacyTest is GardenFixture {
         Garden.CrystalView memory crystal = garden.crystalOf(tokenId);
         PotRecomputer recomputer = new PotRecomputer();
         vm.prank(alice);
-        IAclAllow(getCoprocessorConfig(address(garden)).ACLAddress)
-            .allow(euint64.unwrap(crystal.mana), address(recomputer));
+        IAcl(getCoprocessorConfig(address(garden)).ACLAddress).allow(euint64.unwrap(crystal.mana), address(recomputer));
 
         _shatter(alice, tokenId);
         euint64 recomputed = recomputer.recompute(crystal.mana, crystal.pendingMana, alice);
@@ -254,6 +255,10 @@ contract PrivacyTest is GardenFixture {
 
         assertEq(euint64.unwrap(mana), euint64.unwrap(garden.crystalOf(tokenId).mana), "the recomputation is exact");
         euint64 pot = garden.potOf(1);
+        // A forge test is one transaction, so the attacker still holds every grant it was given or made itself in this
+        // one: the choice, and every handle it computed, the cost of the rise among them. The pot is none of them.
+        IAcl acl = IAcl(getCoprocessorConfig(address(garden)).ACLAddress);
+        assertFalse(acl.isAllowed(euint64.unwrap(pot), address(recomputer)), "the attacker may use the pot");
         assertEq(plaintextOf(recomputed), LEVEL_COST, "the cost of the rise");
         assertEq(plaintextOf(pot), LEVEL_COST, "the same value");
         assertNotEq(euint64.unwrap(recomputed), euint64.unwrap(pot), "another handle");

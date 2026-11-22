@@ -272,6 +272,29 @@ contract SanctuaryTest is GardenFixture {
         _assertCrystal(bobCrystal, 1, 0, bobKey);
     }
 
+    /// Each attunement takes a fresh encryption. A handle sits in the calldata, so the same input twice would show
+    /// everyone that two attunements made the same choice. Garden refuses it again, on the same crystal or another
+    /// one, and takes a new encryption of the same choice.
+    function testAChoiceIsUsedOnce() public {
+        uint256 first = _forge(alice);
+        uint256 second = _forge(alice);
+        _wait(1 days);
+        (externalEbool choice, bytes memory proof) = encryptBool(true, address(garden), alice);
+        vm.prank(alice);
+        garden.attune(first, choice, proof);
+
+        uint256[2] memory crystals = [first, second];
+        for (uint256 i; i < crystals.length; i++) {
+            vm.expectRevert(Garden.ChoiceReused.selector);
+            vm.prank(alice);
+            garden.attune(crystals[i], choice, proof);
+        }
+
+        _attune(alice, second, true);
+        _assertCrystal(first, 2, MANA_PER_DAY - LEVEL_COST);
+        _assertCrystal(second, 2, MANA_PER_DAY - LEVEL_COST);
+    }
+
     // -- What others see ------------------------------------------------------------------------------------
 
     /**
@@ -282,27 +305,50 @@ contract SanctuaryTest is GardenFixture {
      * - refused: rise, then rise. 100 MANA at level 2 fall short of the 200.
      * - hold: hold, then hold.
      * Outside they are the same: Garden's event, the storage slots it writes, every log in order with its emitter,
-     * signature and size, every grant, the gas and the HCU. Only handles differ, and each attunement gives the level,
-     * the MANA and the pot new ones.
+     * signature and size, every grant, the gas and the HCU. Only handles differ, with the slot that marks each input
+     * used, and each attunement gives the level, the MANA and the pot new handles.
      */
     function testARiseARefusedRiseAndAHoldLookTheSameFromOutside() public {
         uint256 tokenId = _forge(alice);
         uint256 forged = vm.snapshotState();
 
-        Trace memory rise = _trace(tokenId, false, true);
+        Trace memory rise = _afterHalfADay(tokenId, false, true);
         assertTrue(vm.revertToState(forged));
-        Trace memory refused = _trace(tokenId, true, true);
+        Trace memory refused = _afterHalfADay(tokenId, true, true);
         assertTrue(vm.revertToState(forged));
-        Trace memory hold = _trace(tokenId, false, false);
+        Trace memory hold = _afterHalfADay(tokenId, false, false);
 
         // The cases are what they claim.
-        assertEq(rise.level, 2, "rise: level");
-        assertEq(rise.spent, LEVEL_COST, "rise: spent");
-        assertEq(refused.level, 2, "refused: level");
-        assertEq(refused.mana, MANA_PER_DAY, "refused: MANA");
-        assertEq(refused.spent, 0, "refused: spent");
-        assertEq(hold.level, 1, "hold: level");
-        assertEq(hold.spent, 0, "hold: spent");
+        _assertOutcome(rise, 2, 150 - LEVEL_COST, LEVEL_COST, "rise");
+        _assertOutcome(refused, 2, 100, 0, "refused");
+        _assertOutcome(hold, 1, 150, 0, "hold");
+
+        _assertSameFromOutside(rise, refused);
+        _assertSameFromOutside(rise, hold);
+    }
+
+    /**
+     * RULES.md §6: a rise refused at the maximum level looks the same as well. Three branches share one public
+     * history, 200 days of MANA and then ten attunements in a row, of which the tenth is measured. Their MANA never
+     * runs short:
+     * - rise: a hold, eight rises to level 9, then the rise to 10, which costs 4,050.
+     * - refused: nine rises to level 10, then a rise, refused at the maximum although 5,750 MANA would cover 5,000.
+     * - hold: nine rises to level 10, then a hold.
+     */
+    function testARiseRefusedAtTheMaximumLooksTheSameFromOutside() public {
+        uint256 tokenId = _forge(alice);
+        _wait(200 days);
+        uint256 rich = vm.snapshotState();
+
+        Trace memory rise = _afterNineAttunements(tokenId, false, true);
+        assertTrue(vm.revertToState(rich));
+        Trace memory refused = _afterNineAttunements(tokenId, true, true);
+        assertTrue(vm.revertToState(rich));
+        Trace memory hold = _afterNineAttunements(tokenId, true, false);
+
+        _assertOutcome(rise, MAX_LEVEL, 5750, 4050, "rise");
+        _assertOutcome(refused, MAX_LEVEL, 5750, 0, "refused");
+        _assertOutcome(hold, MAX_LEVEL, 5750, 0, "hold");
 
         _assertSameFromOutside(rise, refused);
         _assertSameFromOutside(rise, hold);
@@ -328,19 +374,33 @@ contract SanctuaryTest is GardenFixture {
         garden.attune(tokenId, choice, proof);
     }
 
-    /// Two attunements of the crystal, half a day and a day and a half after its forging, and what the second showed.
-    function _trace(uint256 tokenId, bool first, bool second) internal returns (Trace memory t) {
+    /// An attunement half a day after forging, then the one observed, a day later.
+    function _afterHalfADay(uint256 tokenId, bool first, bool observed) internal returns (Trace memory) {
         uint256 forgedAt = garden.crystalOf(tokenId).lastAccrual;
         vm.warp(forgedAt + 0.5 days);
         vm.roll(block.number + 1);
         _attune(alice, tokenId, first);
         vm.warp(forgedAt + 1.5 days);
         vm.roll(block.number + 1);
+        return _observe(tokenId, observed);
+    }
 
-        (externalEbool choice, bytes memory proof) = encryptBool(second, address(garden), alice);
+    /// A first attunement, eight rises, then the one observed.
+    function _afterNineAttunements(uint256 tokenId, bool first, bool observed) internal returns (Trace memory) {
+        _attune(alice, tokenId, first);
+        for (uint256 i; i < 8; i++) {
+            _attune(alice, tokenId, true);
+        }
+        return _observe(tokenId, observed);
+    }
+
+    /// One attunement of Alice's crystal, as an outsider sees it, and what Alice reads afterwards.
+    function _observe(uint256 tokenId, bool rise) internal returns (Trace memory t) {
+        (externalEbool choice, bytes memory proof) = encryptBool(rise, address(garden), alice);
         Garden.CrystalView memory before = garden.crystalOf(tokenId);
-        euint64 pot = garden.potOf(1);
-        uint64 potBefore = _pot(1);
+        uint256 season = garden.currentSeason();
+        euint64 pot = garden.potOf(season);
+        uint64 potBefore = _pot(season);
 
         vm.recordLogs();
         vm.record();
@@ -349,8 +409,13 @@ contract SanctuaryTest is GardenFixture {
         garden.attune(tokenId, choice, proof);
         t.gas = vm.lastCallGas().gasTotalUsed;
         t.hcu = lastHCU();
-        (, t.writes) = vm.accesses(address(garden));
+        (, bytes32[] memory writes) = vm.accesses(address(garden));
         t.logs = vm.getRecordedLogs();
+
+        // The slot that marks the input used comes from the input's handle, which every encryption makes anew, so it
+        // differs between any two attunements. Every other write must be the same.
+        t.writes = _without(writes, _usedSlot(externalEbool.unwrap(choice)));
+        assertEq(t.writes.length, writes.length - 1, "the input marked used, once");
 
         // Garden's one event, whatever happened: Attuned(tokenId).
         uint256 events;
@@ -367,10 +432,37 @@ contract SanctuaryTest is GardenFixture {
         Garden.CrystalView memory afterwards = garden.crystalOf(tokenId);
         t.newLevel = euint8.unwrap(afterwards.level) != euint8.unwrap(before.level);
         t.newMana = euint64.unwrap(afterwards.mana) != euint64.unwrap(before.mana);
-        t.newPot = euint64.unwrap(garden.potOf(1)) != euint64.unwrap(pot);
+        t.newPot = euint64.unwrap(garden.potOf(season)) != euint64.unwrap(pot);
         t.level = decrypt(afterwards.level, address(garden), aliceKey);
         t.mana = decrypt(afterwards.mana, address(garden), aliceKey);
-        t.spent = _pot(1) - potBefore;
+        t.spent = _pot(season) - potBefore;
+    }
+
+    /// The storage slot where Garden marked `input` used. Found by probing for the mapping's slot rather than written
+    /// down, so that a change to Garden's layout cannot make the comparison drop the wrong write.
+    function _usedSlot(bytes32 input) internal view returns (bytes32 slot) {
+        for (uint256 base; base < 64; base++) {
+            slot = keccak256(abi.encode(input, base));
+            if (vm.load(address(garden), slot) == bytes32(uint256(1))) return slot;
+        }
+        revert("the input is not marked used");
+    }
+
+    function _without(bytes32[] memory slots, bytes32 dropped) internal pure returns (bytes32[] memory kept) {
+        kept = new bytes32[](slots.length);
+        uint256 n;
+        for (uint256 i; i < slots.length; i++) {
+            if (slots[i] != dropped) kept[n++] = slots[i];
+        }
+        assembly ("memory-safe") {
+            mstore(kept, n)
+        }
+    }
+
+    function _assertOutcome(Trace memory t, uint8 level, uint64 mana, uint64 spent, string memory name) internal pure {
+        assertEq(t.level, level, string.concat(name, ": level"));
+        assertEq(t.mana, mana, string.concat(name, ": MANA"));
+        assertEq(t.spent, spent, string.concat(name, ": spent"));
     }
 
     function _assertSameFromOutside(Trace memory a, Trace memory b) internal view {

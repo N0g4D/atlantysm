@@ -179,7 +179,7 @@ contract ManaTest is GardenFixture {
         _shatter(alice, third);
         assertEq(plaintextOf(garden.potOf(2)), 3 * MANA_PER_DAY, "three days");
         assertEq(plaintextOf(garden.potOf(1)), 3 * MANA_PER_DAY, "season 1 is left as it was");
-        assertEq(euint64.unwrap(garden.potOf(3)), 0, "a pot exists once it receives MANA");
+        assertEq(euint64.unwrap(garden.potOf(3)), 0, "no pot before a crystal attunes or is shattered in the season");
     }
 
     /// RULES.md §4: what a crystal has been credited and what it accrued since both go to the centre.

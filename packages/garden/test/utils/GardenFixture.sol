@@ -92,8 +92,8 @@ abstract contract GardenFixture is TestFhevm {
         return encryptBool(rise, address(garden), owner);
     }
 
-    /// What a season's pot holds, read with `plaintextOf` since nobody can decrypt it. 0 for a pot that never
-    /// received MANA, whose handle is still empty.
+    /// What a season's pot holds, read with `plaintextOf` since nobody can decrypt it. 0 while its handle is still
+    /// empty, before any crystal attunes or is shattered in that season.
     function _pot(uint256 season) internal returns (uint64) {
         euint64 pot = garden.potOf(season);
         return euint64.unwrap(pot) == 0 ? 0 : plaintextOf(pot);
