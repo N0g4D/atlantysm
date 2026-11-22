@@ -88,10 +88,15 @@ apart.
 *(parameter)*.
 
 **Where the MANA goes.** Spent MANA flows to the centre and becomes the season's prize. Individual contributions
-stay encrypted, and so does the total (§8).
+stay encrypted, and so does the total (§8). Nobody can read the total, but a player knows what it paid in itself.
+So whoever first adds to a season's empty centre, by attuning or shattering, knows the total until anyone else
+adds to it. And since MANA is neither created nor lost, the owners of every live crystal could together work out
+what the centre holds across all seasons.
 
 **What others can know.** From a crystal's public income and record, anyone can work out the highest level it
-could have reached. Never the level it has.
+could have reached. Attunements are public too, so a crystal stands at most one level above the number of times it
+has attuned, and one that has never attuned is at level 1. A *hold* adds to that count without a rise, so the count
+says no more. Nobody else ever learns the level it has.
 
 ## 7. The Arena: duels
 
@@ -155,7 +160,7 @@ in equal shares to every crystal that fought during the season.
 | Lobbies and stakes | Everyone |
 | Who won a duel | Everyone |
 | A crystal's record | Everyone |
-| The centre's total | Nobody; once the season closes, each of the top three can work it out from its own share |
+| The centre's total | Nobody reads it. It can be worked out only from one's own payments into it (§6), and by each of the top three once the season closes (§8) |
 
 ## 10. Why the game needs encryption
 
