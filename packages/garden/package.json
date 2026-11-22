@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@fhevm/solidity": "^0.13.4",
+    "@openzeppelin/contracts": "^5",
     "encrypted-types": "^0.0.4"
   },
   "devDependencies": {

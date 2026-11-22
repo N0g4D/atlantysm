@@ -46,15 +46,39 @@ Per crystal (`tokenId`):
 - **Per duel:** both crystals, the stake, its season, `creatorWins` (`ebool`, publicly decryptable) and a
   `published` flag.
 - **Per season:** `pot` (`euint64`), wins and losses per crystal, the id of each crystal's latest counted win, the
-  top three and a `closed` flag.
+  top three and a `closed` flag. Seasons are numbered from 1, and season 1 starts at the deployment.
 
-The contract's ETH balance always equals `CHARGE × live crystals`.
+The contract's ETH balance always equals `CHARGE × live crystals`. `forge` is the only call that takes ETH: `Garden`
+has no `receive` or `fallback`. ETH that arrives without a call would sit on top, and nothing would ever move it. It
+can come from another contract's `selfdestruct`, from a block reward or withdrawal credited to the address, or from a
+transfer before deployment.
 
 ### 2.2 Encrypted logic (normative)
 
 Names follow `@fhevm/solidity` 0.13.4; check the installed `FHE.sol` before writing a call. After every operation,
 call `FHE.allowThis` on each new handle that is stored, and `FHE.allow(handle, owner)` on each one the owner may
 read.
+
+**Handles.** The protocol derives a handle from its operation, its operands and the block, not from the contract or
+the caller.
+- So whoever is allowed on every operand of an operation can recompute its result in the same block, through a
+  contract of their own, and grant it to anyone. A trivial encryption has no encrypted operand, so anyone can
+  recompute it.
+- Granting a handle to the contract and the owner alone is therefore not enough. Nobody else may be able to
+  recompute it either.
+
+Garden keeps to this in three places:
+- **A crystal's handles descend from its own random draw**, which only Garden ever holds. With `asEuint8(1)` and
+  `asEuint64(0)`, every crystal forged in a block would share its level and MANA handles. Any contract could also
+  make the same handles and grant them to anyone.
+- **Every pot starts from `GARDEN_ZERO`**, an encrypted zero that only Garden holds, drawn at construction as
+  `and(randEuint64(), 0)`. For an empty pot `FHE.add` would use an encrypted plaintext 0, and a shatterer, who holds
+  the crystal's MANA handle, could recompute the season's first pot.
+- **A transfer seals the crystal again with `GARDEN_ZERO`** (Transfer, below).
+
+Every later stored handle combines a crystal's own handles with public scalars, encrypted inputs, other crystals'
+handles or `GARDEN_ZERO`. So nobody but Garden and the crystal's owner can recompute it. The element is the exception,
+because past owners keep it under the rules.
 
 **Accrual.** Plaintext, and run first in every call that touches a crystal's MANA. `SECONDS_PER_MANA` is
 `1 days / MANA_PER_DAY`; the constructor requires the division to be exact.
@@ -65,12 +89,20 @@ lastAccrual += units * SECONDS_PER_MANA          // the remainder waits for the 
 mana         = add(mana, units)
 ```
 
+Garden stores the credit at once and keeps it for itself (`allowThis`). The call then grants the owner the balance it
+ends with.
+- A call that reads `mana` after accruing, or accrues twice, still finds the credit.
+- A call that forgets the owner's grant cannot lock the crystal. The next action, or a shatter, still computes on the
+  stored balance, and the charge still comes back.
+
 **Forge** — payable, `msg.value == CHARGE`.
 
 ```
-element = asEuint8(rem(randEuint16(), 3))        // 65,536 mod 3 = 1: a bias of one part in 65,536
-level   = asEuint8(1)                             // public facts: every crystal starts at level 1
-mana    = asEuint64(0)                            // ... and with no MANA
+draw    = randEuint16()
+element = asEuint8(rem(draw, 3))                  // 65,536 mod 3 = 1: a bias of one part in 65,536
+zero    = and(draw, 0)                            // beside rem, so it adds nothing to the depth
+level   = asEuint8(or(zero, 1))                   // level 1 and no MANA are public facts, but their handles
+mana    = asEuint64(zero)                         // come from the draw (Handles, above)
 ```
 
 **Attune** `(tokenId, externalEbool rise, bytes proof)` — owner only.
@@ -147,12 +179,19 @@ closed yet, rather than to `season + 1`, which may already be closed if this cal
 decrypted.
 
 **Shatter** `(tokenId)` — owner only, the crystal not waiting in a lobby. Accrue, add the crystal's MANA to the
-current season's pot, burn the token, and send `CHARGE` to the owner last.
+current season's pot (an empty pot starts from `GARDEN_ZERO`), burn the token, and send `CHARGE` to the owner last.
 
 **Transfer** — the ERC-721 `_update` hook. Revert if the crystal is waiting in a lobby. On a transfer between two
-accounts (not a mint or a burn), seal the crystal again for the new owner: `level = add(level, 0)` and
-`mana = add(mana, 0)` produce new handles; call `allowThis` and `allow(newOwner)` on both, and `allow(newOwner)` on
-`element`. A test must show that the previous owner cannot decrypt the new handles.
+accounts (not a mint or a burn), seal the crystal again for the new owner.
+- `level = add(level, asEuint8(GARDEN_ZERO))` and `mana = add(mana, GARDEN_ZERO)` produce new handles. Call
+  `allowThis` and `allow(newOwner)` on both, and `allow(newOwner)` on `element`.
+- A plaintext 0 would not do. The previous owner still holds the old handles, so she could recompute
+  `add(level, 0)` in the transfer's block and grant herself the result.
+- A test must show that the previous owner cannot decrypt the new handles, even with a contract of hers that
+  recomputes the reseal in that block.
+
+Until T07 builds this, `_update` refuses every transfer between accounts. Without the reseal, the previous owner
+would keep reading the level and MANA, and the new owner could not read them.
 
 ### 2.3 Rules for every change
 
@@ -162,7 +201,8 @@ accounts (not a mint or a burn), seal the crystal again for the new owner: `leve
 3. A plaintext becomes encrypted (`asEuintXX`) only when its value is public anyway: constants, stakes, accrual.
 4. Only duel outcomes are ever revealed, and only through the publish flow in §2.2.
 5. Access to an encrypted value is granted to the contract itself and to the crystal's current owner, and to
-   nobody else: not the deployer, not a builder, not the keeper.
+   nobody else: not the deployer, not a builder, not the keeper. Nor may anyone else be able to recompute a stored
+   handle and grant it to themselves (§2.2, Handles).
 6. Checks-effects-interactions, and `nonReentrant` around ETH transfers.
 7. Every external function's HCU is measured in a test with `lastHCU()`: the transaction total (cap 20,000,000)
    and the depth (cap 5,000,000). Keep each below half of its cap and record the numbers in §2.6.
@@ -176,11 +216,30 @@ public fields and its handles (so the owner can request decryption), open lobbie
 pagination, the current season, and a season's ranking. Until the Sepolia deployment (T09), names and views may be
 refined, and every change is recorded here. After it, changing the API means a new deployment: stop and ask.
 
+Refined so far:
+
+- **T03.**
+  - **Construction.** The constructor takes one `Params` struct, and each later task adds its parameters to it. They
+    are readable as `CHARGE`, `MANA_PER_DAY`, `SECONDS_PER_MANA` and `SEASON_LENGTH`, and `GENESIS` is the deployment
+    time.
+  - **The token.** It is named "Atlantysm Crystal", with the symbol `CRYSTAL`. `forge()` returns the new token id.
+    Ids start at 1 and are never reused.
+  - **Views.**
+    - `crystalOf(tokenId)` returns the owner, the three handles, `lastAccrual` and `pendingMana`, the MANA accrued
+      since `lastAccrual` and not yet credited. The balance as of now is the decrypted `mana` plus `pendingMana`.
+    - `crystalsOf(owner, cursor, count)` returns an owner's crystals among `count` ids from `cursor`, and the next
+      cursor (0 at the end), so the app can list a player's crystals without an indexer. Like `balanceOf`, it
+      reverts for the zero address.
+    - `totalSupply()` is the number of live crystals, and `lastTokenId()` the id of the latest one forged.
+    - `currentSeason()`.
+    - `potOf(season)` is the handle of a season's pot, which nobody can decrypt.
+
 ### 2.5 Events
 
 `Forged(tokenId, owner)`, `Shattered(tokenId)`, `Attuned(tokenId)`, `LobbyOpened(lobbyId, tokenId, stake)`,
 `LobbyCancelled(lobbyId)`, `DuelFought(duelId, lobbyId, creatorCrystal, challengerCrystal, season)`,
-`DuelPublished(duelId, winner, loser)`, `SeasonClosed(season, first, second, third)`.
+`DuelPublished(duelId, winner, loser)`, `SeasonClosed(season, first, second, third)`. `Forged` indexes the token id
+and the owner, and `Shattered` the token id, so the app can filter them.
 
 ### 2.6 HCU budget
 
@@ -190,12 +249,21 @@ grants survive; `setUp` runs as a transaction of its own, like an earlier transa
 
 | Function | HCU per transaction | Depth |
 |---|---|---|
-| `forge` | | |
+| `forge` | 664,096 | 603,032 |
+| `shatter` | 295,000 | 295,000 |
 | `attune` | | |
 | `openLobby` | 466,064 | 466,000 |
 | `joinLobby` | 2,259,064 | 906,000 |
 | `closeSeason` | | |
 | transfer | | |
+
+`forge` and `shatter` are measured on `Garden` (`packages/garden/test/Hcu.t.sol`). Deploying costs 58,000 HCU, for
+`GARDEN_ZERO`.
+- **`forge`.** Most of it is the element: `randEuint16` costs 23,000, the scalar `rem` on `euint16` 580,000, and
+  the cast to `euint8` 32. The zero for the level and MANA is the scalar `and` and `or` on `euint16` (61,000
+  together) plus two casts of 32. It runs beside the `rem`, so it adds nothing to the depth.
+- **`shatter`.** It makes two additions in a chain: the accrual's scalar `add` (133,000), then the `add` into the pot
+  (162,000). An empty pot starts from `GARDEN_ZERO`, so a season's first shatter costs the same as the others.
 
 `openLobby` and `joinLobby` were measured on the T02 spike (`packages/garden/test/spike/`); T05 measures them again
 on `Garden`. In `joinLobby` the triangle's scalar `rem` is the most expensive operation, 440,000 HCU, and it lies on
@@ -243,9 +311,11 @@ the longest chain: `add`, `rem`, `eq`, three `select`, then the payout `add`.
 ## 5. Tests
 
 - **Rules.** Every rule in `RULES.md` has a test that names its section.
-- **Privacy.** A stranger cannot decrypt any crystal's values. After a transfer, the previous owner cannot decrypt
-  the new level and MANA. No event or revert differs between a rise, a refused rise and a hold, or between a
-  forfeit and a defeat.
+- **Privacy.**
+  - A stranger cannot decrypt any crystal's values, and nobody else can recompute one of its handles in the same
+    block (§2.2, Handles).
+  - After a transfer, the previous owner cannot decrypt the new level and MANA, even by recomputing the reseal.
+  - No event or revert differs between a rise, a refused rise and a hold, or between a forfeit and a defeat.
 - **Adversarial.** A forged outcome, a replayed proof and a second publish are rejected. A season cannot be
   closed early or twice. A crystal waiting in a lobby cannot be transferred, shattered or entered twice. A stake
   below or above its bounds is rejected.
