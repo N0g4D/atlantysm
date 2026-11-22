@@ -6,8 +6,9 @@ import {Garden} from "../../src/Garden.sol";
 /**
  * @dev Test only. Accrual credits a crystal when it acts. `act` credits it and does nothing else, so that the MANA
  *      tests can watch the credited balance and the remainder that waits for the next call. `actTwice` and
- *      `actWithoutSealing` are careless actions that no real function takes. The conservation handler attunes since
- *      T04. When T05 brings the Arena, the MANA tests should move to the real actions and this harness should go.
+ *      `actWithoutSealing` are careless actions that no real function takes, so no real function can stand in for
+ *      them, and the harness stays. The conservation handler drives the real actions: forging, attuning, the Arena
+ *      and shattering.
  */
 contract GardenHarness is Garden {
     constructor(Params memory params) Garden(params) {}

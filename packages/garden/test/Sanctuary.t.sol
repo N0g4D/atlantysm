@@ -466,27 +466,11 @@ contract SanctuaryTest is GardenFixture {
     }
 
     function _assertSameFromOutside(Trace memory a, Trace memory b) internal view {
-        address acl = getCoprocessorConfig(address(garden)).ACLAddress;
         assertTrue(a.newLevel && a.newMana && a.newPot && b.newLevel && b.newMana && b.newPot, "new handles");
         assertEq(a.writes, b.writes, "storage slots written");
         assertEq(a.gas, b.gas, "gas");
         assertEq(a.hcu.transaction, b.hcu.transaction, "HCU per transaction");
         assertEq(a.hcu.maxHandle, b.hcu.maxHandle, "HCU depth");
-
-        assertEq(a.logs.length, b.logs.length, "number of logs");
-        for (uint256 i; i < a.logs.length; i++) {
-            Vm.Log memory x = a.logs[i];
-            Vm.Log memory y = b.logs[i];
-            string memory at = string.concat("log ", vm.toString(i));
-            assertEq(x.emitter, y.emitter, string.concat(at, ": emitter"));
-            assertEq(x.topics.length, y.topics.length, string.concat(at, ": topics"));
-            assertEq(x.topics[0], y.topics[0], string.concat(at, ": event"));
-            assertEq(x.data.length, y.data.length, string.concat(at, ": data size"));
-            // Garden's own events carry public data only, so they are identical. The ACL's name the accounts granted.
-            if (x.emitter == address(garden)) assertEq(x.data, y.data, string.concat(at, ": Garden's data"));
-            if (x.emitter == address(garden) || x.emitter == acl) {
-                assertEq(x.topics, y.topics, string.concat(at, ": indexed fields"));
-            }
-        }
+        _assertSameLogs(a.logs, b.logs);
     }
 }

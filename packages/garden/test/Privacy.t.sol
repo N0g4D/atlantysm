@@ -265,6 +265,125 @@ contract PrivacyTest is GardenFixture {
         _assertCannotDecrypt(pot, alice, aliceKey);
     }
 
+    // -- The Arena -----------------------------------------------------------------------------------------------
+
+    /// RULES.md §7 and §9: a lobby's stake is public, whether its creator could pay it is not. Read from the ACL's
+    /// events, opening a lobby grants the credited balance to the contract, as accrual keeps it, the new balance to the
+    /// contract and the owner, and `creatorPaid` to the contract alone. Nothing becomes publicly decryptable, and
+    /// nobody else can read the balance or `creatorPaid`.
+    function testOpeningALobbyGrantsTheNewBalanceToTheOwnerOnly() public {
+        uint256 tokenId = _forge(alice);
+        _forge(bob);
+        _wait(1 days);
+
+        vm.recordLogs();
+        uint256 lobbyId = _openLobby(tokenId, 40);
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        _assertNothingPublic(logs);
+
+        Grant[] memory grants = _grantsIn(logs);
+        assertEq(grants.length, 4, "number of grants");
+        _assertCredit(grants[0], MANA_PER_DAY);
+        _assertGrant(grants[1], address(garden), euint64.unwrap(garden.crystalOf(tokenId).mana));
+        _assertGrant(grants[2], alice, euint64.unwrap(garden.crystalOf(tokenId).mana));
+        _assertGrant(grants[3], address(garden), ebool.unwrap(garden.lobbyOf(lobbyId).creatorPaid));
+
+        euint64 mana = garden.crystalOf(tokenId).mana;
+        ebool paid = garden.lobbyOf(lobbyId).creatorPaid;
+        _assertCannotDecrypt(mana, bob, bobKey);
+        _assertCannotDecrypt(mana, stranger, strangerKey);
+        _assertNotPublic(mana);
+        _assertCannotDecrypt(paid, bob, bobKey);
+        _assertCannotDecrypt(paid, stranger, strangerKey);
+        _assertNotPublic(paid);
+    }
+
+    /**
+     * RULES.md §3, invariant 3, and §7: a duel publishes who won and nothing else. Read from the ACL's events, joining
+     * grants both credited balances to the contract, each new balance to the contract and its own owner, and the
+     * outcome to the contract, and makes the outcome, and only it, publicly decryptable. Each player reads its own
+     * balance; the opponent, a stranger and the public read neither.
+     */
+    function testADuelRevealsOnlyItsOutcome() public {
+        uint256 a = _forge(alice);
+        uint256 b = _forge(bob);
+        _wait(1 days);
+        uint256 lobbyId = _openLobby(a, 40);
+        _wait(1 days);
+
+        vm.recordLogs();
+        uint256 duelId = _join(lobbyId, b);
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+
+        euint64 manaA = garden.crystalOf(a).mana;
+        euint64 manaB = garden.crystalOf(b).mana;
+        ebool outcome = garden.duelOf(duelId).creatorWins;
+        Grant[] memory grants = _grantsIn(logs);
+        assertEq(grants.length, 7, "number of grants");
+        _assertCredit(grants[0], MANA_PER_DAY - 40 + MANA_PER_DAY);
+        _assertCredit(grants[1], 2 * MANA_PER_DAY);
+        _assertGrant(grants[2], address(garden), euint64.unwrap(manaA));
+        _assertGrant(grants[3], alice, euint64.unwrap(manaA));
+        _assertGrant(grants[4], address(garden), euint64.unwrap(manaB));
+        _assertGrant(grants[5], bob, euint64.unwrap(manaB));
+        _assertGrant(grants[6], address(garden), ebool.unwrap(outcome));
+        bytes32[] memory revealed = _madePublic(logs);
+        assertEq(revealed.length, 1, "one handle made public");
+        assertEq(revealed[0], ebool.unwrap(outcome), "the outcome");
+
+        // The outcome is public. Each balance is its owner's alone.
+        bool creatorWon = decryptPublic(outcome);
+        uint64 expectedA = creatorWon ? 2 * MANA_PER_DAY + 40 : 2 * MANA_PER_DAY - 40;
+        assertEq(decrypt(manaA, address(garden), aliceKey), expectedA, "Alice reads hers");
+        assertEq(decrypt(manaB, address(garden), bobKey), 4 * MANA_PER_DAY - expectedA, "Bob reads his");
+        _assertCannotDecrypt(manaA, bob, bobKey);
+        _assertCannotDecrypt(manaA, stranger, strangerKey);
+        _assertCannotDecrypt(manaB, alice, aliceKey);
+        _assertCannotDecrypt(manaB, stranger, strangerKey);
+        _assertNotPublic(manaA);
+        _assertNotPublic(manaB);
+        // Neither crystal's element or level was granted to anyone new.
+        _assertCannotDecrypt(garden.crystalOf(a).element, bob, bobKey);
+        _assertCannotDecrypt(garden.crystalOf(a).level, bob, bobKey);
+        _assertCannotDecrypt(garden.crystalOf(b).element, alice, aliceKey);
+        _assertCannotDecrypt(garden.crystalOf(b).level, alice, aliceKey);
+    }
+
+    /// RULES.md §7: cancelling grants the credited balance to the contract and the new balance to the contract and the
+    /// owner, and reveals nothing.
+    function testCancellingGrantsTheNewBalanceToTheOwnerOnly() public {
+        uint256 tokenId = _forge(alice);
+        _wait(1 days);
+        uint256 lobbyId = _openLobby(tokenId, 40);
+        _wait(LOBBY_TIMEOUT);
+
+        vm.recordLogs();
+        _cancel(lobbyId);
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        _assertNothingPublic(logs);
+
+        euint64 mana = garden.crystalOf(tokenId).mana;
+        Grant[] memory grants = _grantsIn(logs);
+        assertEq(grants.length, 3, "number of grants");
+        _assertCredit(grants[0], MANA_PER_DAY - 40 + MANA_PER_DAY);
+        _assertGrant(grants[1], address(garden), euint64.unwrap(mana));
+        _assertGrant(grants[2], alice, euint64.unwrap(mana));
+        assertEq(decrypt(mana, address(garden), aliceKey), 2 * MANA_PER_DAY, "the stake came back");
+        _assertCannotDecrypt(mana, stranger, strangerKey);
+        _assertNotPublic(mana);
+    }
+
+    /// A grant to the contract of a credited balance, as accrual keeps it: no longer stored, so checked by its value.
+    function _assertCredit(Grant memory grant, uint64 credited) internal {
+        assertEq(grant.account, address(garden), "the credit is the contract's");
+        assertEq(plaintextOf(euint64.wrap(grant.handle)), credited, "the credited balance");
+    }
+
+    function _assertGrant(Grant memory grant, address account, bytes32 handle) internal pure {
+        assertEq(grant.account, account, "grantee");
+        assertEq(grant.handle, handle, "handle");
+    }
+
     /// The logs up to and including the first ACL grant.
     function _firstGrant(Vm.Log[] memory logs) internal view returns (Vm.Log[] memory first) {
         address acl = getCoprocessorConfig(address(garden)).ACLAddress;
