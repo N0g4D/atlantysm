@@ -304,7 +304,7 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
     /**
      * @notice Opens a lobby with the sender's crystal and a public stake, from MIN_STAKE to MAX_STAKE MANA. The crystal
      *         puts up the stake now, from its encrypted balance, if that covers it. One that cannot puts up nothing, and
-     *         the stakes of its duel will stay where they are. From outside, the duel looks like any other.
+     *         the stakes of its duel will stay where they are. The duel itself looks the same from outside either way.
      */
     function openLobby(uint256 tokenId, uint64 stake) external returns (uint256 lobbyId) {
         // `ownerOf` reverts for a crystal that was never forged or is already shattered.

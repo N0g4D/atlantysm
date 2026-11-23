@@ -174,11 +174,13 @@ duel.creatorWins = makePubliclyDecryptable(aWins)
 `RULES.md` §7 as amended in #12: the outcome reads no payment, and the stake changes hands only when both crystals
 covered it.
 - **A** put up its stake at opening if it covered it (`paidA`). When both covered, A gets both stakes if it won and
-  nothing if it lost. Otherwise it gets its own stake back.
+  nothing if it lost. Otherwise it gets back what it put up: its stake, or nothing if it could not cover it.
 - **B** puts up its stake and settles it in the same call, so its balance moves only by `moved`. The `sub` cannot
   wrap: `moved` is nonzero only if B covered the stake.
-- **Whether the stakes moved** is never stored or granted. Every line runs whatever the payments were, so nobody
-  outside the duel can tell. Each player sees it in its own balance (`RULES.md` §9).
+- **Whether the stakes moved** is never stored or granted. Every line runs whatever the payments were, so the duel
+  itself shows nobody outside it. Each player sees it in its own balance (`RULES.md` §9). Public history can still
+  settle it when it settles whether each side could cover the stake. A crystal forged too recently to have earned
+  the stake cannot, and one that has never attuned has a balance others can often work out (`RULES.md` §5).
 
 The duel records the season in progress, which it counts for once published.
 
@@ -353,8 +355,13 @@ Every function is measured on `Garden` (`packages/garden/test/Hcu.t.sol`). Deplo
   longest chain: `add`, `rem`, `eq`, three `select` (the outcome, the winner's share, both or the refund), then the
   payout `add`.
   - A duel whose stakes stay runs the same operations at the same cost (`Arena.t.sol`).
-  - The forfeit of the T02 spike cost 2,259,064. Without it, an `and` replaces the `xor`, the outcome takes one
-    `select` fewer, and the two stakes are no longer added together. That saves 213,968, at the same depth.
+  - Joining with the forfeit of the T02 spike cost 2,259,064. Without it:
+    - an `and` (25,000) replaces the `xor` (22,000);
+    - the outcome takes one `select` fewer (55,000);
+    - the two stakes are no longer added together (162,000);
+    - the winner's `2 × stake` adds a trivial encryption (32).
+
+    That is 213,968 less, at the same depth.
 - **`publish`.** No encrypted operation: checking the KMS signatures costs gas only.
 
 ## 3. Toolchain

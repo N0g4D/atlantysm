@@ -4,6 +4,7 @@ pragma solidity ^0.8.24;
 import {ebool, euint64, externalEbool} from "@fhevm/solidity/lib/FHE.sol";
 import {CommonBase} from "forge-std/Base.sol";
 import {StdUtils} from "forge-std/StdUtils.sol";
+import {Vm} from "forge-std/Vm.sol";
 import {Garden} from "../src/Garden.sol";
 import {GardenFixture} from "./utils/GardenFixture.sol";
 
@@ -12,7 +13,8 @@ import {GardenFixture} from "./utils/GardenFixture.sol";
  *      publishing duels and waiting, one transaction per call. It keeps its own plaintext model of what should hold,
  *      worked out from the rules alone: which crystals are live, the level and MANA of each, what each season's pot
  *      holds, which lobbies are open and what their creators put up, and every crystal's record. Two inputs come from
- *      Garden, because only Garden draws them: each crystal's element, and the coin of a mirror between equal levels.
+ *      Garden's draws, because only Garden makes them: each crystal's element, and the coin of a mirror between equal
+ *      levels, read from the executor's event rather than from the outcome.
  */
 contract GardenHandler is CommonBase, StdUtils {
     /// RULES.md §12. Copies rather than Garden's own values, so that what the handler expects does not rest on the
@@ -24,6 +26,8 @@ contract GardenHandler is CommonBase, StdUtils {
     uint64 internal constant MIN_STAKE = 10;
     uint64 internal constant MAX_STAKE = 100;
     uint256 internal constant LOBBY_TIMEOUT = 24 hours;
+    /// The executor's event for a random value: the coprocessor draws the coin from it, and the handler reads it back.
+    bytes32 internal constant FHE_RAND = keccak256("FheRand(address,uint8,bytes16,bytes32)");
 
     struct Lobby {
         uint256 crystal;
@@ -173,8 +177,10 @@ contract GardenHandler is CommonBase, StdUtils {
         uint256 lobbyId = openLobbies[index];
         Lobby memory lobby = lobbies[lobbyId];
         uint256 a = lobby.crystal;
+        vm.recordLogs();
         vm.prank(garden.ownerOf(b));
         uint256 duelId = garden.joinLobby(lobbyId, b);
+        bool coin = _coinOf(vm.getRecordedLogs());
 
         _close(index, a);
         _credit(a);
@@ -185,8 +191,8 @@ contract GardenHandler is CommonBase, StdUtils {
         } else if (levelOf[a] != levelOf[b]) {
             aWins = levelOf[a] > levelOf[b];
         } else {
-            // The coin, which only Garden draws. The outcome is public anyway.
-            aWins = fixture.plaintextBool(garden.duelOf(duelId).creatorWins);
+            // The coin the join drew, read from the executor's event, not from the outcome.
+            aWins = coin;
         }
         // The creator's stake, if it put one up, leaves the lobby either way.
         if (lobby.paid) staked -= lobby.stake;
@@ -275,6 +281,20 @@ contract GardenHandler is CommonBase, StdUtils {
             if (waitingIn[live[index]] == 0) return (index, true);
         }
         return (0, false);
+    }
+
+    /// The one random value a join draws, read from the executor's event as the coprocessor reads it.
+    function _coinOf(Vm.Log[] memory logs) internal returns (bool) {
+        bytes32 handle;
+        uint256 draws;
+        for (uint256 i; i < logs.length; i++) {
+            if (logs[i].topics.length > 0 && logs[i].topics[0] == FHE_RAND) {
+                (,, handle) = abi.decode(logs[i].data, (uint8, bytes16, bytes32));
+                draws++;
+            }
+        }
+        require(draws == 1, "one random value per join");
+        return fixture.plaintextBool(ebool.wrap(handle));
     }
 
     /// The lobby at `index` is no longer open, and its crystal no longer waits.
@@ -407,8 +427,8 @@ contract ConservationTest is GardenFixture {
     }
 
     /// The same for the Arena: a duel whose stakes move, one where only the creator covers the stake, one where neither
-    /// does, a cancel that gives the stake back and one with nothing to give back, and a duel published after one of
-    /// its crystals was shattered. Each crystal is picked by its index among the live ones, in forging order until the
+    /// does, one where only the challenger does, a cancel that gives the stake back and one with nothing to give back,
+    /// and a duel published after one of its crystals was shattered. Each crystal is picked by its index among the live ones, in forging order until the
     /// shatter.
     function testTheInvariantsHoldOnAKnownArenaSequence() public {
         handler.forge(0);
@@ -429,22 +449,26 @@ contract ConservationTest is GardenFixture {
         handler.forge(2);
         handler.openLobby(4, 10);
         handler.joinLobby(0, 5);
-        // Lobby 4: crystal 3, which took back its 40, puts up 100. Lobby 5: crystal 4, empty, puts up nothing.
+        // Lobby 4 and duel 4: crystal 5, still empty, opens at 10, and crystal 2 covers it. The stakes stay.
+        handler.openLobby(4, 10);
+        handler.joinLobby(0, 1);
+        // Lobby 5: crystal 3, which took back its 40, puts up 100. Lobby 6: crystal 4, empty, puts up nothing.
         handler.openLobby(2, 100);
         handler.openLobby(3, 10);
         handler.wait(1 days);
         handler.cancelLobby(0);
         handler.cancelLobby(0);
-        // Duel 1 is published, then crystal 6 is shattered, then duels 3 and 2 are published.
+        // Duel 1 is published, then crystal 6 is shattered, then duels 4, 3 and 2 are published.
         handler.publish(0);
         handler.shatter(5);
         handler.publish(0);
         handler.publish(0);
+        handler.publish(0);
 
-        assertEq(handler.duels(), 3, "duels");
+        assertEq(handler.duels(), 4, "duels");
         assertEq(handler.stakesMoved(), 1, "stakes moved in duel 1 only");
-        assertEq(handler.published(), 3, "published");
-        assertEq(garden.lastLobbyId(), 5, "lobbies");
+        assertEq(handler.published(), 4, "published");
+        assertEq(garden.lastLobbyId(), 6, "lobbies");
         assertEq(handler.lobbiesOpen().length, 0, "every lobby closed");
         assertEq(handler.staked(), 0, "no stake held");
         (uint32 wins, uint32 losses) = garden.recordOf(6);
