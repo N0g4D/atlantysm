@@ -74,8 +74,10 @@ Every crystal receives the same flow of MANA from the Monolith: **100 MANA per d
 accrued continuously and credited whenever the crystal acts. On mainnet the flow is the staking yield of all the
 charges, divided equally among crystals.
 
-A crystal's balance is encrypted. Anyone can work out how much MANA a crystal has received, because the flow is
-public and so are its stakes and results. Nobody else can tell how much it has spent or has left.
+A crystal's balance is encrypted. From the public flow and the crystal's stakes and results, anyone can work out
+the most MANA it can have received, but not whether each stake moved (§7). Once a crystal has attuned, nobody else
+can tell how much it has spent or has left. One that has never attuned has spent nothing in secret, so others can
+often work out its balance.
 
 ## 6. The Sanctuary: levels
 
@@ -114,18 +116,19 @@ lobby asks for more than a day of MANA can cover. Anyone can join it with one cr
 wait in one open lobby at a time. The creator can cancel a lobby that nobody has joined after **24 hours**
 *(parameter)*.
 
-**Stakes and forfeits.** The creator puts up the stake when opening the lobby, the challenger when joining, both
-from their encrypted balances. A crystal that cannot cover the stake loses by forfeit, and nobody can tell a
-forfeit from a defeat. If neither crystal can cover it, the duel is decided as usual and no MANA moves.
+**Stakes.** Elements and levels decide every duel: MANA never wins one. The creator puts up the stake when opening
+the lobby, and the challenger when joining, each from its encrypted balance if that covers the stake. The stake
+moves only when both crystals have covered it, and then the winner takes both. Otherwise each crystal keeps its
+own and no MANA moves. Nobody outside the duel can tell which happened, because the outcome does not depend on it.
+Each of the two players can, from its own balance.
 
-**Resolution.** The duel is fought the moment the challenger joins. The outcome is computed on encrypted data and
-the stakes move at once, still encrypted: the winner takes the pot, which is both stakes, or only its own back if
-the loser forfeited. Then only the winner is decrypted and published, with a proof that the contract verifies.
-Anyone can submit the published result, so no player can stall it by staying away.
+**Resolution.** The duel is fought the moment the challenger joins. The outcome is computed on encrypted data, and
+any stakes move at once, still encrypted. Then only the winner is decrypted and published, with a proof that the
+contract verifies. Anyone can submit the published result, so no player can stall it by staying away.
 
-**What a duel reveals.** The two crystals, the stake and the winner. Each player also knows their own crystal's
-element and level, so every duel tells them something about the opponent. Deducing who is who, and hiding it, is
-the game.
+**What a duel reveals.** The two crystals, the stake and the winner. Each player also knows its own crystal's
+element and level, and sees from its own balance whether the stakes moved, so every duel tells it something about
+the opponent. Deducing who is who, and hiding it, is the game.
 
 ## 8. Seasons and the centre
 
@@ -143,10 +146,14 @@ individual crystals had spent. Each winner sees only its own share, and since th
 the total from that share once the season is closed; nobody else can. A share with no crystal to take it, because
 fewer than three were ranked or one has been shattered, stays in the centre for the season in progress.
 
-**Known weakness.** A player with several crystals can duel themselves to inflate their wins, and no on-chain
-ranking can rule that out entirely. That is acceptable in Season 0, where nothing has monetary value, and must be
-resolved before mainnet. Options on the table: count each pair of crystals once per season; or return the centre
-in equal shares to every crystal that fought during the season.
+**Known weaknesses.** A player with several crystals can duel themselves to inflate their wins, and no on-chain
+ranking can rule that out entirely. A lobby's creator can also refuse any challenger: it sees the challenger's
+transaction before it is mined and gets in first, joining its own lobby with another of its crystals, which earns it
+a win as well, or cancelling the lobby once that is allowed. A second wallet gets around any check on addresses.
+Both weaknesses are acceptable in Season 0, where nothing has monetary value, and must be resolved before mainnet.
+Options on the table: count each pair of crystals once per season; return the centre in equal shares to every
+crystal that fought during the season; let challengers join through private transactions, or in two steps,
+committing to a hidden crystal first.
 
 ## 9. What is public, what is secret
 
@@ -159,6 +166,7 @@ in equal shares to every crystal that fought during the season.
 | The charge | Everyone (it is the same for every crystal) |
 | Lobbies and stakes | Everyone |
 | Who won a duel | Everyone |
+| Whether a duel's stakes moved | The two players |
 | A crystal's record | Everyone |
 | The centre's total | Nobody reads it. It can be worked out only from one's own payments into it (§6), and by each of the top three once the season closes (§8) |
 
