@@ -119,8 +119,10 @@ wait in one open lobby at a time. The creator can cancel a lobby that nobody has
 **Stakes.** Elements and levels decide every duel: MANA never wins one. The creator puts up the stake when opening
 the lobby, and the challenger when joining, each from its encrypted balance if that covers the stake. The stake
 moves only when both crystals have covered it, and then the winner takes both. Otherwise each crystal keeps its
-own and no MANA moves. Nobody outside the duel can tell which happened, because the outcome does not depend on it.
-Each of the two players can, from its own balance.
+own and no MANA moves. The duel itself shows nobody outside it which happened, because the outcome does not depend on
+it. Public history can still settle it, when it settles whether each crystal could cover the stake: a crystal forged
+too recently to have received the stake cannot, and one that has never attuned often has a balance others can work
+out (§5). Each of the two players can always tell, from its own balance.
 
 **Resolution.** The duel is fought the moment the challenger joins. The outcome is computed on encrypted data, and
 any stakes move at once, still encrypted. Then only the winner is decrypted and published, with a proof that the
@@ -150,10 +152,14 @@ fewer than three were ranked or one has been shattered, stays in the centre for 
 ranking can rule that out entirely. A lobby's creator can also refuse any challenger: it sees the challenger's
 transaction before it is mined and gets in first, joining its own lobby with another of its crystals, which earns it
 a win as well, or cancelling the lobby once that is allowed. A second wallet gets around any check on addresses.
-Both weaknesses are acceptable in Season 0, where nothing has monetary value, and must be resolved before mainnet.
-Options on the table: count each pair of crystals once per season; return the centre in equal shares to every
-crystal that fought during the season; let challengers join through private transactions, or in two steps,
-committing to a hidden crystal first.
+And a crystal that cannot cover the stake fights without risking MANA. A new one never can, and its element can be
+drawn again for the price of gas (§4), so a player who has guessed a creator's element can forge until it draws the
+one that beats it, then join for free: a win if it guessed right, nothing lost if not. The same freedom lets a new
+player fight at once, without waiting for its crystal to fill. These weaknesses are acceptable in Season 0, where
+nothing has monetary value, and must be resolved before mainnet. Options on the table: count each pair of crystals
+once per season; return the centre in equal shares to every crystal that fought during the season; let challengers
+join through private transactions, or in two steps, committing to a hidden crystal first; refuse a lobby or a join
+to a crystal that has not yet received the stake.
 
 ## 9. What is public, what is secret
 
@@ -166,7 +172,7 @@ committing to a hidden crystal first.
 | The charge | Everyone (it is the same for every crystal) |
 | Lobbies and stakes | Everyone |
 | Who won a duel | Everyone |
-| Whether a duel's stakes moved | The two players |
+| Whether a duel's stakes moved | The two players; others only when public history settles whether each crystal could cover the stake (§7) |
 | A crystal's record | Everyone |
 | The centre's total | Nobody reads it. It can be worked out only from one's own payments into it (§6), and by each of the top three once the season closes (§8) |
 
