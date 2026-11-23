@@ -369,9 +369,10 @@ contract CrystalsTest is GardenFixture {
     }
 
     /// The constructor refuses an Arena it cannot run: a zero minimum stake, which would make a stake symbolic
-    /// (RULES.md §7), a minimum above the maximum, which leaves no stake to choose, and a lobby timeout longer than a
-    /// season, which could keep a waiting crystal from being shattered for longer. A single allowed stake is fine, and
-    /// so are a timeout of a whole season and none at all.
+    /// (RULES.md §7), a minimum above the maximum, which leaves no stake to choose, a maximum whose double, what a
+    /// duel's winner takes, does not fit in 64 bits, and a lobby timeout longer than a season, which could keep a
+    /// waiting crystal from being shattered for longer. A single allowed stake is fine, and so are a timeout of a whole
+    /// season and none at all.
     function testTheConstructorRefusesAnUnusableArena() public {
         Garden.Params memory params = _seasonZero();
         params.minStake = 0;
@@ -384,6 +385,12 @@ contract CrystalsTest is GardenFixture {
         params.minStake = params.maxStake;
         Garden single = new Garden(params);
         assertEq(single.MIN_STAKE(), single.MAX_STAKE());
+
+        params = _seasonZero();
+        params.maxStake = type(uint64).max / 2;
+        assertEq(new Garden(params).MAX_STAKE(), type(uint64).max / 2);
+        params.maxStake++;
+        _assertRefused(params);
 
         params = _seasonZero();
         params.lobbyTimeout = params.seasonLength + 1;

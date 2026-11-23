@@ -159,19 +159,26 @@ Close the lobby and unlock the creator's crystal first, before any encrypted ope
 and `B` the challenger's; accrue both first.
 
 ```
-paidB   = ge(manaB, stake)
-manaB   = sub(manaB, select(paidB, stake, 0))
 same    = eq(eA, eB)
 aBeatsB = eq(eB, rem(add(eA, 1), 3))              // Fire > Earth > Water > Fire
 coin    = randEbool()                             // drawn every time: nothing branches on the inputs
 mirror  = select(eq(lA, lB), coin, gt(lA, lB))
-normal  = select(same, mirror, aBeatsB)
-aWins   = select(xor(paidA, paidB), paidA, normal)  // exactly one side paid: the payer wins
-pot     = add(select(paidA, stake, 0), select(paidB, stake, 0))
-manaA   = add(manaA, select(aWins, pot, 0))
-manaB   = add(manaB, select(aWins, 0, pot))
+aWins   = select(same, mirror, aBeatsB)           // elements and levels alone: MANA never wins a duel
+both    = and(paidA, ge(manaB, stake))            // the stake moves only if both crystals covered it
+moved   = select(both, stake, 0)
+manaA   = add(manaA, select(both, select(aWins, 2 × stake, 0), select(paidA, stake, 0)))
+manaB   = select(aWins, sub(manaB, moved), add(manaB, moved))
 duel.creatorWins = makePubliclyDecryptable(aWins)
 ```
+
+`RULES.md` §7 as amended in #12: the outcome reads no payment, and the stake changes hands only when both crystals
+covered it.
+- **A** put up its stake at opening if it covered it (`paidA`). When both covered, A gets both stakes if it won and
+  nothing if it lost. Otherwise it gets its own stake back.
+- **B** puts up its stake and settles it in the same call, so its balance moves only by `moved`. The `sub` cannot
+  wrap: `moved` is nonzero only if B covered the stake.
+- **Whether the stakes moved** is never stored or granted. Every line runs whatever the payments were, so nobody
+  outside the duel can tell. Each player sees it in its own balance (`RULES.md` §9).
 
 The duel records the season in progress, which it counts for once published.
 
@@ -270,9 +277,14 @@ Refined so far:
     already used (§2.2).
 - **T05.**
   - **Construction.** `Params` gains `minStake`, `maxStake` and `lobbyTimeout`, readable as `MIN_STAKE`, `MAX_STAKE`
-    and `LOBBY_TIMEOUT`. The constructor refuses a zero minimum stake, a minimum above the maximum, and a lobby timeout
-    longer than a season: a crystal waiting in a lobby nobody joins cannot be shattered before the timeout. A deployment
-    with a short season (T09) needs a timeout as short. A zero timeout is allowed: the creator may cancel at once.
+    and `LOBBY_TIMEOUT`. The constructor refuses:
+    - a zero minimum stake;
+    - a minimum above the maximum;
+    - a maximum above `type(uint64).max / 2`, since a duel's winner takes the public `2 × stake`, encrypted as a
+      `euint64`;
+    - a lobby timeout longer than a season, since a crystal waiting in a lobby nobody joins cannot be shattered before
+      the timeout. A deployment with a short season (T09) needs a timeout as short. A zero timeout is allowed: the
+      creator may cancel at once.
   - **The Arena.** `openLobby` returns the new lobby id and `joinLobby` the new duel id. Both start at 1 and are
     never reused. The creator can join its own lobby with another crystal (`RULES.md` §8 accepts it in Season 0).
   - **Reverts.** `StakeOutOfBounds`; `CrystalWaiting` when a waiting crystal opens a lobby, joins one (its own
@@ -312,7 +324,7 @@ grants survive; `setUp` runs as a transaction of its own, like an earlier transa
 | `attune` | 1,420,064 | 909,032 |
 | `openLobby` | 466,064 | 466,000 |
 | `cancelLobby` | 350,064 | 295,000 |
-| `joinLobby` | 2,259,064 | 906,000 |
+| `joinLobby` | 2,045,096 | 906,000 |
 | `publish` | 0 | 0 |
 | `closeSeason` | | |
 | transfer | | |
@@ -338,15 +350,18 @@ Every function is measured on `Garden` (`packages/garden/test/Hcu.t.sol`). Deplo
 - **`cancelLobby`.** The accrual (133,000), then the `add` of the refund (162,000). The refund's `select` (55,000)
   runs beside the accrual.
 - **`joinLobby`.** The triangle's scalar `rem` is the most expensive operation, 440,000 HCU, and it lies on the
-  longest chain: `add`, `rem`, `eq`, three `select`, then the payout `add`. A forfeit runs the same operations at the
-  same cost (`Arena.t.sol`). The numbers are those of the T02 spike, which the `Garden` measurement repeats exactly.
+  longest chain: `add`, `rem`, `eq`, three `select` (the outcome, the winner's share, both or the refund), then the
+  payout `add`.
+  - A duel whose stakes stay runs the same operations at the same cost (`Arena.t.sol`).
+  - The forfeit of the T02 spike cost 2,259,064. Without it, an `and` replaces the `xor`, the outcome takes one
+    `select` fewer, and the two stakes are no longer added together. That saves 213,968, at the same depth.
 - **`publish`.** No encrypted operation: checking the KMS signatures costs gas only.
 
 ## 3. Toolchain
 
 - **Solidity:** solc 0.8.24, EVM `cancun`, the optimizer on at 200 runs; Foundry 1.7.1, pinned in CI.
-  - Every FHE call inlines its checks. At T05, `Garden` is 16,777 bytes with the optimizer, of the 24,576 allowed.
-    Without it, it would be 28,086 and could not be deployed, so the optimizer is no longer optional. At T04 the two
+  - Every FHE call inlines its checks. At T05, `Garden` is 16,662 bytes with the optimizer, of the 24,576 allowed.
+    Without it, it would be 27,824 and could not be deployed, so the optimizer is no longer optional. At T04 the two
     figures were 11,442 and 19,632.
   - Verification on Etherscan (T09) must use the same settings.
 - **Contract packages:** `@fhevm/solidity` ^0.13.4, `encrypted-types` ^0.0.4 (which `FHE.sol` imports, so every
@@ -393,7 +408,8 @@ Every function is measured on `Garden` (`packages/garden/test/Hcu.t.sol`). Deplo
   - A stranger cannot decrypt any crystal's values, and nobody else can recompute one of its handles in the same
     block (§2.2, Handles).
   - After a transfer, the previous owner cannot decrypt the new level and MANA, even by recomputing the reseal.
-  - No event or revert differs between a rise, a refused rise and a hold, or between a forfeit and a defeat.
+  - No event or revert differs between a rise, a refused rise and a hold, or between a duel whose stakes moved and
+    one whose stakes stayed.
 - **Adversarial.** A forged outcome, a replayed proof and a second publish are rejected. A season cannot be
   closed early or twice. A crystal waiting in a lobby cannot be transferred, shattered or entered twice. A stake
   below or above its bounds is rejected.

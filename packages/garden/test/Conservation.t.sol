@@ -62,7 +62,8 @@ contract GardenHandler is CommonBase, StdUtils {
     uint256 public staked;
     uint256 public rises;
     uint256 public duels;
-    uint256 public forfeits;
+    /// The duels whose stakes changed hands, because both crystals covered them.
+    uint256 public stakesMoved;
     uint256 public published;
 
     constructor(Garden garden_, GardenFixture fixture_, address[] memory actors_) {
@@ -158,9 +159,9 @@ contract GardenHandler is CommonBase, StdUtils {
     }
 
     /**
-     * @notice RULES.md §7: the challenger pays if it can. Exactly one payer wins; otherwise the triangle decides, then
-     *         the higher level in a mirror, then the coin. The winner takes both stakes, or its own back after a
-     *         forfeit, and nothing moves when neither paid.
+     * @notice RULES.md §7: elements and levels decide, whoever covers the stake: the triangle, then the higher level in
+     *         a mirror, then the coin. The challenger covers the stake if its MANA does. The stake changes hands only
+     *         if both covered it, and then the winner takes both. Otherwise the creator takes back what it put up.
      */
     function joinLobby(uint256 lobbySeed, uint256 crystalSeed) external {
         if (openLobbies.length == 0) return;
@@ -178,13 +179,8 @@ contract GardenHandler is CommonBase, StdUtils {
         _close(index, a);
         _credit(a);
         _credit(b);
-        bool paidB = manaOf[b] >= lobby.stake;
-        if (paidB) manaOf[b] -= lobby.stake;
         bool aWins;
-        if (lobby.paid != paidB) {
-            aWins = lobby.paid;
-            forfeits++;
-        } else if (elementOf[a] != elementOf[b]) {
+        if (elementOf[a] != elementOf[b]) {
             aWins = _beats(elementOf[a], elementOf[b]);
         } else if (levelOf[a] != levelOf[b]) {
             aWins = levelOf[a] > levelOf[b];
@@ -192,9 +188,20 @@ contract GardenHandler is CommonBase, StdUtils {
             // The coin, which only Garden draws. The outcome is public anyway.
             aWins = fixture.plaintextBool(garden.duelOf(duelId).creatorWins);
         }
-        uint256 stakes = (lobby.paid ? lobby.stake : 0) + (paidB ? lobby.stake : 0);
+        // The creator's stake, if it put one up, leaves the lobby either way.
         if (lobby.paid) staked -= lobby.stake;
-        manaOf[aWins ? a : b] += stakes;
+        if (lobby.paid && manaOf[b] >= lobby.stake) {
+            // Both covered the stake: the winner takes both.
+            if (aWins) {
+                manaOf[a] += 2 * lobby.stake;
+                manaOf[b] -= lobby.stake;
+            } else {
+                manaOf[b] += lobby.stake;
+            }
+            stakesMoved++;
+        } else if (lobby.paid) {
+            manaOf[a] += lobby.stake;
+        }
         creatorShouldWin[duelId] = aWins;
         pendingDuels.push(duelId);
         duels++;
@@ -399,23 +406,25 @@ contract ConservationTest is GardenFixture {
         invariant_lobbiesAndRecordsFollowTheRules();
     }
 
-    /// The same for the Arena: a duel both sides pay for, a challenger's forfeit, a duel neither side can pay for, a
-    /// cancel that gives the stake back and one with nothing to give back, and a duel published after one of its
-    /// crystals was shattered. Each crystal is picked by its index among the live ones, in forging order until the
+    /// The same for the Arena: a duel whose stakes move, one where only the creator covers the stake, one where neither
+    /// does, a cancel that gives the stake back and one with nothing to give back, and a duel published after one of
+    /// its crystals was shattered. Each crystal is picked by its index among the live ones, in forging order until the
     /// shatter.
     function testTheInvariantsHoldOnAKnownArenaSequence() public {
         handler.forge(0);
         handler.forge(1);
         handler.forge(2);
         handler.wait(1 days);
-        // Crystals 1, 2 and 3 hold 100 MANA each. Lobby 1 and duel 1: both pay 40.
+        // Crystals 1, 2 and 3 hold 100 MANA each. Lobby 1 and duel 1: both cover 40, and the winner takes both.
         handler.openLobby(0, 40);
         handler.joinLobby(0, 1);
-        // Lobby 2 and duel 2: crystal 3 pays 40, and crystal 4, just forged, cannot and forfeits.
+        // Lobby 2 and duel 2: crystal 3 puts up 40, and crystal 4, just forged, cannot cover it. The stakes stay, whoever
+        // wins.
         handler.forge(0);
         handler.openLobby(2, 40);
         handler.joinLobby(0, 3);
-        // Lobby 3 and duel 3: crystals 5 and 6, just forged, cannot pay 10, and the duel is decided as usual.
+        // Lobby 3 and duel 3: crystals 5 and 6, just forged, cannot cover 10. The duel is decided as usual, and no MANA
+        // moves.
         handler.forge(1);
         handler.forge(2);
         handler.openLobby(4, 10);
@@ -433,7 +442,7 @@ contract ConservationTest is GardenFixture {
         handler.publish(0);
 
         assertEq(handler.duels(), 3, "duels");
-        assertEq(handler.forfeits(), 1, "forfeits");
+        assertEq(handler.stakesMoved(), 1, "stakes moved in duel 1 only");
         assertEq(handler.published(), 3, "published");
         assertEq(garden.lastLobbyId(), 5, "lobbies");
         assertEq(handler.lobbiesOpen().length, 0, "every lobby closed");

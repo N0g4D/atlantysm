@@ -77,7 +77,8 @@ contract HcuTest is GardenFixture {
         _assertWithinBudget("openLobby", lastHCU());
     }
 
-    /// Both crystals pay the stake here. A forfeit runs the same operations at the same cost (Arena.t.sol shows it).
+    /// Both crystals cover the stake here, so it changes hands. A duel whose stakes stay runs the same operations at the
+    /// same cost (Arena.t.sol shows it).
     function testJoiningStaysUnderHalfOfEachCap() public {
         resetHCU();
         vm.prank(bob);

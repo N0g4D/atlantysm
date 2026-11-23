@@ -9,7 +9,7 @@ import {Vm} from "forge-std/Vm.sol";
 import {Garden} from "../src/Garden.sol";
 import {GardenFixture} from "./utils/GardenFixture.sol";
 
-/// RULES.md §7, the Arena: lobbies, duels, stakes and forfeits, and publishing the outcome.
+/// RULES.md §7, the Arena: lobbies, duels, stakes, and publishing the outcome.
 contract ArenaTest is GardenFixture {
     uint64 internal constant STAKE = 40;
     /// A day of MANA, which covers the stake, and a balance that falls short of it by one MANA.
@@ -396,47 +396,65 @@ contract ArenaTest is GardenFixture {
         garden.cancelLobby(lobbyId);
     }
 
-    // -- Stakes and forfeits --------------------------------------------------------------------------------
+    // -- Stakes ---------------------------------------------------------------------------------------------
 
-    /// RULES.md §7, Stakes and forfeits: a creator that cannot cover the stake loses, even with the element that wins,
-    /// and the challenger takes back only its own stake.
-    function testACreatorWhoCannotPayForfeits() public {
-        (uint256 a, uint256 b) = _pair(WATER, SHORT, FIRE, FUNDED);
-        _assertDuel(a, b, false, SHORT, FUNDED, "creator short");
+    /**
+     * RULES.md §7, Stakes: elements and levels decide every duel, and MANA never wins one. Water beats Fire whichever
+     * crystal covers the stake, as the creator and as the challenger, in all four cases: both cover it, only the
+     * creator, only the challenger, neither. The stake changes hands only when both covered it, and then the winner
+     * takes both. Otherwise each crystal keeps its own, and the creator takes back what it put up.
+     */
+    function testElementsDecideWhoeverCoversTheStake() public {
+        for (uint256 i; i < 4; i++) {
+            (bool aCovers, bool bCovers) = (i & 1 == 0, i & 2 == 0);
+            uint64 manaA = aCovers ? FUNDED : SHORT;
+            uint64 manaB = bCovers ? FUNDED : SHORT;
+            bool moves = aCovers && bCovers;
+            string memory label = string.concat(
+                "creator ", aCovers ? "covers" : "short", ", challenger ", bCovers ? "covers" : "short", ", "
+            );
+
+            (uint256 a, uint256 b) = _pair(WATER, manaA, FIRE, manaB);
+            _assertDuel(
+                a,
+                b,
+                true,
+                moves ? manaA + STAKE : manaA,
+                moves ? manaB - STAKE : manaB,
+                string.concat(label, "Water creates")
+            );
+            (a, b) = _pair(FIRE, manaA, WATER, manaB);
+            _assertDuel(
+                a,
+                b,
+                false,
+                moves ? manaA - STAKE : manaA,
+                moves ? manaB + STAKE : manaB,
+                string.concat(label, "Fire creates")
+            );
+        }
     }
 
-    function testAChallengerWhoCannotPayForfeits() public {
-        (uint256 a, uint256 b) = _pair(FIRE, FUNDED, WATER, SHORT);
-        _assertDuel(a, b, true, FUNDED, SHORT, "challenger short");
-    }
-
-    /// RULES.md §7: if neither crystal can cover the stake, the duel is decided as usual and no MANA moves.
-    function testWhenNeitherCanPayNoManaMoves() public {
-        (uint256 a, uint256 b) = _pair(WATER, SHORT, FIRE, SHORT);
-        _assertDuel(a, b, true, SHORT, SHORT, "the creator wins");
-        // The same two crystals, the other way round. Each still holds what it held.
-        _assertDuel(b, a, false, SHORT, SHORT, "the challenger wins");
-    }
-
-    /// The boundary of both stake checks: a balance equal to the stake covers it.
-    function testABalanceEqualToTheStakePays() public {
+    /// The boundary of both stake checks: a balance equal to the stake covers it, and the stakes move.
+    function testABalanceEqualToTheStakeCoversIt() public {
         (uint256 a, uint256 b) = _pair(WATER, STAKE, FIRE, FUNDED);
         _assertDuel(a, b, true, 2 * STAKE, FUNDED - STAKE, "creator");
         (a, b) = _pair(FIRE, FUNDED, WATER, STAKE);
         _assertDuel(a, b, false, FUNDED - STAKE, 2 * STAKE, "challenger");
     }
 
-    /// RULES.md §7: the creator puts up the stake when opening the lobby. One that could not cover it then forfeits,
-    /// even if it has earned enough by the time a challenger joins.
-    function testTheCreatorPaysWhenOpening() public {
+    /// RULES.md §7: the creator puts up the stake when opening the lobby. One that could not cover it then has put up
+    /// nothing, and the stakes stay, even if it has earned enough by the time a challenger joins. Its element still
+    /// wins the duel.
+    function testTheCreatorCoversTheStakeWhenOpening() public {
         (uint256 a, uint256 b) = _pair(WATER, SHORT, FIRE, FUNDED);
         uint256 lobbyId = _openLobby(a, STAKE);
         _wait(1 days);
         uint256 duelId = _join(lobbyId, b);
 
-        assertFalse(decryptPublic(garden.duelOf(duelId).creatorWins), "the creator forfeits");
-        assertEq(_balanceOf(a, aliceKey), SHORT + MANA_PER_DAY, "the creator lost nothing");
-        assertEq(_balanceOf(b, bobKey), FUNDED + MANA_PER_DAY, "the challenger took back its stake");
+        assertTrue(decryptPublic(garden.duelOf(duelId).creatorWins), "Water wins");
+        assertEq(_balanceOf(a, aliceKey), SHORT + MANA_PER_DAY, "the creator took nothing");
+        assertEq(_balanceOf(b, bobKey), FUNDED + MANA_PER_DAY, "the challenger lost nothing");
     }
 
     /// SEASON0.md §2.2, Join: both crystals accrue before the stake moves, so MANA earned while the lobby waited
@@ -448,7 +466,8 @@ contract ArenaTest is GardenFixture {
 
         uint256 duelId = _join(lobbyId, b);
 
-        // Water beats Fire, and the challenger, empty when the lobby opened, has just earned the stake: it takes both.
+        // Water beats Fire, and the challenger, empty when the lobby opened, has just earned the stake, so both covered
+        // it: the challenger takes both.
         assertFalse(decryptPublic(garden.duelOf(duelId).creatorWins));
         assertEq(decrypt(garden.crystalOf(b).mana, address(garden), bobKey), 2 * STAKE);
         // The creator put up the stake when opening, and earned as much while waiting.
@@ -641,62 +660,63 @@ contract ArenaTest is GardenFixture {
     // -- What others see ------------------------------------------------------------------------------------
 
     /**
-     * RULES.md §7 and SEASON0.md §5: from outside, a challenger's forfeit looks like its defeat. Both branches run from
-     * the same state with the same public history: two crystals with 80 MANA each, Water's lobby at a stake of 40, then
-     * an attunement of the challenger's Fire crystal. Only the encrypted choice differs: a hold keeps its 80, and Fire
-     * loses on the element; a rise spends 50, the 30 left cannot cover the stake, and Fire forfeits. Outside, the
-     * joins are the same: Garden's event, the storage slots written and the public values in them, every log with all
-     * its fields but handles, what every view shows afterwards, the gas and the HCU. The winner is not outside: its
-     * balance gains a stake after a defeat and nothing after a forfeit, as RULES.md §7 pays it.
+     * RULES.md §7 and §9, and SEASON0.md §5: nobody outside a duel can tell whether its stakes moved. Both branches run
+     * from the same state with the same public history: two crystals with 80 MANA each, Water's lobby at a stake of
+     * 40, then an attunement of the challenger's Fire crystal. Only the encrypted choice differs. A hold keeps Fire's
+     * 80, both cover the stake, and Water takes both. A rise spends 50, the 30 left do not cover the stake, and the
+     * stakes stay. Water wins both times: the outcome does not depend on the stakes. Outside, the joins are the same:
+     * Garden's event, the storage slots written and the public values in them, every log with all its fields but
+     * handles, what every view shows afterwards, the gas and the HCU. The two players are not outside: each sees in its
+     * own balance whether the stakes moved, as RULES.md §9 allows.
      */
-    function testAChallengersForfeitLooksLikeADefeat() public {
+    function testWhetherTheChallengerCoveredTheStakeDoesNotShow() public {
         (uint256 a, uint256 b) = _pair(WATER, 80, FIRE, 80);
         _openLobby(a, STAKE);
         uint256 lobbyId = garden.lastLobbyId();
         uint256 opened = vm.snapshotState();
 
         _attune(bob, b, false);
-        Trace memory defeat = _observe(bob, abi.encodeCall(Garden.joinLobby, (lobbyId, b)));
-        assertTrue(decryptPublic(garden.duelOf(1).creatorWins), "defeat: Water wins");
-        assertEq(_balanceOf(a, aliceKey), 80 + STAKE, "defeat: Water takes both stakes");
-        assertEq(_balanceOf(b, bobKey), 80 - STAKE, "defeat: Fire lost its stake");
+        Trace memory moved = _observe(bob, abi.encodeCall(Garden.joinLobby, (lobbyId, b)));
+        assertTrue(decryptPublic(garden.duelOf(1).creatorWins), "moved: Water wins");
+        assertEq(_balanceOf(a, aliceKey), 80 + STAKE, "moved: Water takes both stakes");
+        assertEq(_balanceOf(b, bobKey), 80 - STAKE, "moved: Fire lost its stake");
 
         assertTrue(vm.revertToState(opened));
         _attune(bob, b, true);
-        Trace memory forfeit = _observe(bob, abi.encodeCall(Garden.joinLobby, (lobbyId, b)));
-        assertTrue(decryptPublic(garden.duelOf(1).creatorWins), "forfeit: Water wins");
-        assertEq(_balanceOf(a, aliceKey), 80, "forfeit: Water takes back its stake");
-        assertEq(_balanceOf(b, bobKey), 80 - LEVEL_COST, "forfeit: Fire paid nothing");
+        Trace memory stayed = _observe(bob, abi.encodeCall(Garden.joinLobby, (lobbyId, b)));
+        assertTrue(decryptPublic(garden.duelOf(1).creatorWins), "stayed: Water wins");
+        assertEq(_balanceOf(a, aliceKey), 80, "stayed: Water takes back its stake");
+        assertEq(_balanceOf(b, bobKey), 80 - LEVEL_COST, "stayed: Fire keeps what it had");
 
-        _assertSameFromOutside(defeat, forfeit);
+        _assertSameFromOutside(moved, stayed);
     }
 
     /**
      * The same for the creator, whose stake is taken when the lobby opens: neither the opening nor the join tells a
-     * creator that put up the stake and lost from one that could not and forfeited. Fire attunes, then opens a lobby
-     * at a stake of 40 that Water joins. A hold keeps Fire's 80 MANA; a rise leaves 30.
+     * creator that covered the stake from one that could not. Fire attunes, then opens a lobby at a stake of 40 that
+     * Water joins. A hold keeps Fire's 80 MANA, and Water takes both stakes. A rise leaves 30, and the stakes stay.
      */
-    function testACreatorsForfeitLooksLikeADefeat() public {
+    function testWhetherTheCreatorCoveredTheStakeDoesNotShow() public {
         (uint256 a, uint256 b) = _pair(FIRE, 80, WATER, 80);
         uint256 forged = vm.snapshotState();
 
         _attune(alice, a, false);
-        Trace memory paidOpen = _observe(alice, abi.encodeCall(Garden.openLobby, (a, STAKE)));
-        Trace memory defeat = _observe(bob, abi.encodeCall(Garden.joinLobby, (1, b)));
-        assertFalse(decryptPublic(garden.duelOf(1).creatorWins), "defeat: Water wins");
-        assertEq(_balanceOf(a, aliceKey), 80 - STAKE, "defeat: Fire lost its stake");
-        assertEq(_balanceOf(b, bobKey), 80 + STAKE, "defeat: Water takes both stakes");
+        Trace memory coveredOpen = _observe(alice, abi.encodeCall(Garden.openLobby, (a, STAKE)));
+        Trace memory moved = _observe(bob, abi.encodeCall(Garden.joinLobby, (1, b)));
+        assertFalse(decryptPublic(garden.duelOf(1).creatorWins), "moved: Water wins");
+        assertEq(_balanceOf(a, aliceKey), 80 - STAKE, "moved: Fire lost its stake");
+        assertEq(_balanceOf(b, bobKey), 80 + STAKE, "moved: Water takes both stakes");
 
         assertTrue(vm.revertToState(forged));
         _attune(alice, a, true);
-        Trace memory unpaidOpen = _observe(alice, abi.encodeCall(Garden.openLobby, (a, STAKE)));
-        Trace memory forfeit = _observe(bob, abi.encodeCall(Garden.joinLobby, (1, b)));
-        assertFalse(decryptPublic(garden.duelOf(1).creatorWins), "forfeit: Water wins");
-        assertEq(_balanceOf(a, aliceKey), 80 - LEVEL_COST, "forfeit: Fire paid nothing");
-        assertEq(_balanceOf(b, bobKey), 80, "forfeit: Water takes back its stake");
+        Trace memory shortOpen = _observe(alice, abi.encodeCall(Garden.openLobby, (a, STAKE)));
+        Trace memory stayed = _observe(bob, abi.encodeCall(Garden.joinLobby, (1, b)));
+        assertFalse(decryptPublic(garden.duelOf(1).creatorWins), "stayed: Water wins");
+        assertEq(_balanceOf(a, aliceKey), 80 - LEVEL_COST, "stayed: Fire keeps what it had");
+        assertEq(_balanceOf(b, bobKey), 80, "stayed: Water keeps what it had");
 
-        _assertSameFromOutside(paidOpen, unpaidOpen);
-        _assertSameFromOutside(defeat, forfeit);
+        _assertSameFromOutside(coveredOpen, shortOpen);
+        _assertSameFromOutside(moved, stayed);
     }
 
     /// Cancelling a lobby does not tell whether its creator had put up the stake: the MANA gets a new handle either

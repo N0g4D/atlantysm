@@ -147,7 +147,7 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
     event Attuned(uint256 indexed tokenId);
     event LobbyOpened(uint256 indexed lobbyId, uint256 indexed tokenId, uint64 stake);
     event LobbyCancelled(uint256 indexed lobbyId);
-    /// The same for a forfeit and a defeat (RULES.md §7): the outcome stays a handle until it is published.
+    /// The same whether the stakes moved or not (RULES.md §7): the outcome stays a handle until it is published.
     event DuelFought(
         uint256 indexed duelId,
         uint256 lobbyId,
@@ -180,11 +180,12 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
         // maximum, so a wrap at the maximum itself would do no harm, but exact values are simpler to check.
         bool levels = params.maxLevel >= 2 && params.maxLevel <= 15 && params.levelCost != 0
             && uint256(params.levelCost) * params.maxLevel * params.maxLevel <= type(uint64).max;
-        // A stake is never symbolic (RULES.md §7), and the bounds must leave a stake to choose. A crystal waiting in a
-        // lobby that nobody joins cannot be shattered before the timeout, so the timeout may not outlast a season: the
-        // charge must come back within reach (RULES.md §3, invariant 1).
-        bool arena =
-            params.minStake != 0 && params.minStake <= params.maxStake && params.lobbyTimeout <= params.seasonLength;
+        // A stake is never symbolic (RULES.md §7), and the bounds must leave a stake to choose. A duel's winner takes
+        // both stakes, encrypted from the public 2 × stake, which must fit in 64 bits. A crystal waiting in a lobby that
+        // nobody joins cannot be shattered before the timeout, so the timeout may not outlast a season: the charge must
+        // come back within reach (RULES.md §3, invariant 1).
+        bool arena = params.minStake != 0 && params.minStake <= params.maxStake
+            && params.maxStake <= type(uint64).max / 2 && params.lobbyTimeout <= params.seasonLength;
         if (params.charge == 0 || !wholeSteps || params.seasonLength == 0 || !levels || !arena) {
             revert InvalidParams();
         }
@@ -302,8 +303,8 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
 
     /**
      * @notice Opens a lobby with the sender's crystal and a public stake, from MIN_STAKE to MAX_STAKE MANA. The crystal
-     *         puts up the stake now, from its encrypted balance. One that cannot cover it puts up nothing: it loses by
-     *         forfeit to a challenger that pays, and from outside the duel looks like any other.
+     *         puts up the stake now, from its encrypted balance, if that covers it. One that cannot puts up nothing, and
+     *         the stakes of its duel will stay where they are. From outside, the duel looks like any other.
      */
     function openLobby(uint256 tokenId, uint64 stake) external returns (uint256 lobbyId) {
         // `ownerOf` reverts for a crystal that was never forged or is already shattered.
@@ -357,8 +358,9 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
     }
 
     /**
-     * @notice Joins an open lobby with the sender's crystal, and the duel is fought at once. The challenger puts up the
-     *         stake now, and the stakes move, still encrypted. Only the outcome becomes publicly decryptable, for
+     * @notice Joins an open lobby with the sender's crystal, and the duel is fought at once. Elements and levels decide
+     *         the winner. The challenger puts up the stake now if its balance covers it, and the stakes change hands,
+     *         still encrypted, only if both crystals covered them. Only the outcome becomes publicly decryptable, for
      *         anyone to `publish`.
      */
     function joinLobby(uint256 lobbyId, uint256 tokenId) external returns (uint256 duelId) {
@@ -519,10 +521,12 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
     // -- Internal ----------------------------------------------------------------------------------------------
 
     /**
-     * @dev SEASON0.md §2.2, Join: the duel, on encrypted data. A is the creator's crystal, which paid the stake when
-     *      the lobby opened if `paidA`, and B the challenger's, which pays it here. Every line runs on every join and
-     *      `select` picks the results (SEASON0.md §2.3, rule 1), so a forfeit and a defeat run the same operations
-     *      and look the same from outside. Returns whether A won, granted to this contract and publicly decryptable.
+     * @dev SEASON0.md §2.2, Join: the duel, on encrypted data. A is the creator's crystal, which put up the stake when
+     *      the lobby opened if `paidA`, and B the challenger's, which puts it up here if it covers it. Elements and
+     *      levels decide the winner, and the stake changes hands only if both covered it (RULES.md §7). Every line runs
+     *      on every join and `select` picks the results (SEASON0.md §2.3, rule 1), so a duel whose stakes moved and one
+     *      whose stakes stayed run the same operations and look the same from outside. Returns whether A won, granted
+     *      to this contract and publicly decryptable.
      */
     function _fight(Crystal storage a, address ownerA, Crystal storage b, address ownerB, uint64 stake, ebool paidA)
         internal
@@ -534,24 +538,29 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
         euint64 staked = FHE.asEuint64(stake);
         euint64 zero = FHE.asEuint64(0);
 
-        ebool paidB = FHE.ge(manaB, stake);
-        manaB = FHE.sub(manaB, FHE.select(paidB, staked, zero));
-        // Exactly one side paid: the payer wins. Both or neither: elements and levels decide.
-        aWins = FHE.select(FHE.xor(paidA, paidB), paidA, _normal(a, b));
+        // MANA never wins a duel: the outcome reads no payment, so it cannot reveal one.
+        aWins = _outcome(a, b);
 
-        // What the winner takes (the "pot" of RULES.md §7): both stakes, the payer's own after a forfeit, nothing when
-        // neither paid. No sum here can wrap: each is at most the MANA in existence, which only accrual creates.
-        euint64 stakes = FHE.add(FHE.select(paidA, staked, zero), FHE.select(paidB, staked, zero));
-        a.mana = _seal(FHE.add(manaA, FHE.select(aWins, stakes, zero)), ownerA);
-        b.mana = _seal(FHE.add(manaB, FHE.select(aWins, zero, stakes)), ownerB);
+        // The stake changes hands only if both crystals covered it.
+        ebool both = FHE.and(paidA, FHE.ge(manaB, stake));
+        euint64 moved = FHE.select(both, staked, zero);
+        // A put up its stake at opening if it covered it. When both covered, the winner takes both stakes; otherwise A
+        // takes its own back. The constructor keeps 2 × stake within 64 bits, and no sum here can wrap: each is at most
+        // the MANA in existence, which only accrual creates.
+        euint64 toA =
+            FHE.select(both, FHE.select(aWins, FHE.asEuint64(2 * stake), zero), FHE.select(paidA, staked, zero));
+        a.mana = _seal(FHE.add(manaA, toA), ownerA);
+        // B puts up its stake and settles it in this same call, so its balance moves only by the stake that changes
+        // hands. `moved` is nonzero only if B covered it, so the subtraction cannot wrap.
+        b.mana = _seal(FHE.select(aWins, FHE.sub(manaB, moved), FHE.add(manaB, moved)), ownerB);
 
         FHE.allowThis(aWins);
         // The only value a duel reveals (SEASON0.md §2.3, rule 4).
         FHE.makePubliclyDecryptable(aWins);
     }
 
-    /// Whether A beats B on elements and levels alone: the triangle, then the higher level in a mirror, then a coin.
-    function _normal(Crystal storage a, Crystal storage b) internal returns (ebool) {
+    /// Whether A beats B, on elements and levels alone: the triangle, then the higher level in a mirror, then a coin.
+    function _outcome(Crystal storage a, Crystal storage b) internal returns (ebool) {
         ebool same = FHE.eq(a.element, b.element);
         // Fire > Earth > Water > Fire: with 0 = Fire, 1 = Earth and 2 = Water, each element beats the next one.
         ebool aBeatsB = FHE.eq(b.element, FHE.rem(FHE.add(a.element, 1), 3));
