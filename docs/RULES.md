@@ -92,8 +92,10 @@ apart.
 **Where the MANA goes.** Spent MANA flows to the centre and becomes the season's prize. Individual contributions
 stay encrypted, and so does the total (§8). Nobody can read the total, but a player knows what it paid in itself.
 So whoever first adds to a season's empty centre, by attuning or shattering, knows the total until anyone else
-adds to it. And since MANA is neither created nor lost, the owners of every live crystal could together work out
-what the centre holds across all seasons.
+adds to it. The top three of a closed season also know, to within a few MANA, what its close carried over into the
+centre of the season in progress (§8), and so that centre's total if it was empty, again until anyone else adds to
+it. And since MANA is neither created nor lost, the owners of every live crystal could together work out what the
+centre holds across all seasons.
 
 **What others can know.** From a crystal's public income and record, anyone can work out the highest level it
 could have reached. Attunements are public too, so a crystal stands at most one level above the number of times it
@@ -138,15 +140,18 @@ A season lasts **four weeks** *(parameter)*. A new season resets the ranking onl
 MANA and record.
 
 **Ranking.** Crystals are ranked by Arena wins in the season. Ties go to whoever reached the score first, counting
-duels in the order they were fought. A duel counts for the season in which it was fought, once its result is
-published. A season can
-be closed **1 hour** after it ends *(parameter)*; results published later count only in the crystals' records.
+duels in the order they were fought. A duel counts for the season in which it was fought if its result is published
+within **1 hour** of the season's end *(parameter)*; a result published later counts only in the crystals' records.
+The ranking is final at that hour, and from then on anyone can close the season: whoever closes it, and whenever,
+the outcome is the same.
 
 **The prize.** When a season is closed, the centre is credited to the top three crystals in encrypted shares:
-**50%, 30% and 20%** *(parameter)*. Its total is never published: with few players, it would reveal what
-individual crystals had spent. Each winner sees only its own share, and since the split is fixed, it can work out
-the total from that share once the season is closed; nobody else can. A share with no crystal to take it, because
-fewer than three were ranked or one has been shattered, stays in the centre for the season in progress.
+**50%, 30% and 20%** *(parameter)*, each rounded down. Its total is never published: with few players, it would
+reveal what individual crystals had spent. Each winner sees only its own share, and since the split is fixed, it can
+work out the total from that share once the season is closed, to within a few MANA because of the rounding. Nobody
+else can, unless it already knows the total from its own payments (§6); and whoever knows the total knows every
+share. A share with no crystal to take it, because fewer than three were ranked or one has been shattered, stays in
+the centre for the season in progress, with what the rounding leaves.
 
 **Known weaknesses.** A player with several crystals can duel themselves to inflate their wins, and no on-chain
 ranking can rule that out entirely. A lobby's creator can also refuse any challenger: it sees the challenger's
@@ -174,7 +179,7 @@ to a crystal that has not yet received the stake.
 | Who won a duel | Everyone |
 | Whether a duel's stakes moved | The two players; others only when public history settles whether each crystal could cover the stake (§7) |
 | A crystal's record | Everyone |
-| The centre's total | Nobody reads it. It can be worked out only from one's own payments into it (§6), and by each of the top three once the season closes (§8) |
+| The centre's total | Nobody reads it. It can be worked out from one's own payments into it and, to within a few MANA, by a closed season's top three (§6, §8) |
 
 ## 10. Why the game needs encryption
 
@@ -211,5 +216,5 @@ Sanctuary, the Arena and the seasonal ranking, with simulated MANA and charges i
 | Stake | From 10 to 100 MANA |
 | Lobby timeout | 24 hours |
 | Season length | 3 days in Season 0, then 4 weeks |
-| Season close delay | 1 hour after the season ends |
+| Season close delay | 1 hour after the season ends: from then on, results no longer count for it, and it can be closed |
 | Prize split | 50% / 30% / 20% |
