@@ -223,8 +223,8 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
             && params.maxStake <= type(uint64).max / 2 && params.lobbyTimeout <= params.seasonLength;
         // The centre goes to the top three in full (RULES.md §8), so the shares add up to 100, and what a closed season
         // keeps back, the shares nobody takes and what rounding leaves, is never negative. No place takes more than the
-        // one above it. And the close delay may not outlast a season, so that a season's prize is always within reach
-        // before the next season ends.
+        // one above it. And the close delay may not outlast a season, so that a season can always be closed by the time
+        // the next one ends.
         uint8[3] memory shares = params.prizeShares;
         bool seasons = uint256(shares[0]) + shares[1] + shares[2] == 100 && shares[0] >= shares[1]
             && shares[1] >= shares[2] && params.seasonCloseDelay <= params.seasonLength;
@@ -617,8 +617,8 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
         return (block.timestamp - GENESIS) / SEASON_LENGTH + 1;
     }
 
-    /// The handle of a season's pot, 0 until a crystal attunes or is shattered in that season, and 0 again once the
-    /// season is closed and its pot paid out. Nobody can decrypt it.
+    /// The handle of a season's pot: 0 until something is added to it, by an attunement, a shatter or the close of an
+    /// earlier season, and 0 again once the season is closed and its pot paid out. Nobody can decrypt it.
     function potOf(uint256 season) external view returns (euint64) {
         return _pots[season];
     }

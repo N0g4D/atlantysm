@@ -329,8 +329,10 @@ Refined so far:
     - shares that do not add up to 100. The centre goes to the top three in full, and past 100 a close would pay out
       more than the pot holds;
     - a place that takes more than the one above it;
-    - a close delay longer than a season, which would hold a prize back past the end of the next season. A zero delay
-      is allowed.
+    - a close delay longer than a season, which would hold a prize back past the end of the next season.
+
+    A zero delay is accepted, but then a season can be closed the moment it ends, before its last duels can be
+    decrypted and published, and those count only in the records. A deployment needs a delay that covers both (T09).
   - **Seasons.** `closeSeason(season)` emits `SeasonClosed`. It reverts with:
     - `UnknownSeason` for season 0;
     - `TooEarlyToClose` for the season in progress, a later one, or one that ended less than `SEASON_CLOSE_DELAY` ago.
@@ -338,7 +340,8 @@ Refined so far:
     - `AlreadyClosed`.
   - **Views.**
     - `rankingOf(season)` returns the top three, best first, their wins in the season, and whether the season is
-      closed. An empty place is 0.
+      closed. An empty place is 0. A crystal shattered since keeps its place; whether its share was paid shows only
+      in whether its `Shattered` event came before `SeasonClosed`.
     - `scoreOf(season, tokenId)` returns a crystal's wins and losses counted in the season, and `lastWin`, the id of
       the latest duel among those wins, which breaks ties.
     - `potOf(season)` returns 0 again once the season is closed.
@@ -350,8 +353,9 @@ Refined so far:
 `DuelPublished(duelId, winner, loser)`, `SeasonClosed(season, first, second, third)`. `Forged` indexes the token id
 and the owner, and `Shattered` and `Attuned` the token id, so the app can filter them. `LobbyOpened` indexes the
 lobby and the token, `LobbyCancelled` the lobby, `DuelFought` the duel and both crystals, `DuelPublished` the
-duel, the winner and the loser, and `SeasonClosed` the season. `SeasonClosed` gives 0 for an empty place, and carries
-neither the pot nor the shares. `publish` also emits the library's `PublicDecryptionVerified` from Garden, with the
+duel, the winner and the loser, and `SeasonClosed` the season. `SeasonClosed` gives 0 for an empty place, and lists a
+crystal shattered before the close in its place, although its share stayed in the centre. It carries neither the pot
+nor the shares. `publish` also emits the library's `PublicDecryptionVerified` from Garden, with the
 outcome's handle and value, which are public.
 
 ### 2.6 HCU budget
@@ -360,7 +364,8 @@ Filled in by T02 and kept current. Each number is `lastHCU()` for a single call 
 A forge test is one transaction, so within it a handle carries the depth of the calls that made it and transient
 grants survive; `setUp` runs as a transaction of its own, like an earlier transaction on chain. Since T06, `setUp`
 builds more than one transaction may hold, so it lifts the caps. The meter still runs, and every test compares its one
-call with half of each cap, which is stricter than the cap itself.
+call with half of each cap, which is stricter than the cap itself. Each test also pins its row of the table, so a
+change that costs more or less fails until the table follows.
 
 | Function | HCU per transaction | Depth |
 |---|---|---|
@@ -415,7 +420,9 @@ Every function is measured on `Garden` (`packages/garden/test/Hcu.t.sol`). Deplo
     season in progress 162,000 more.
   - The longest chain is a share, then the three `sub`s from the rest, then that `add`: 1,728,000.
   - Each share computed in `euint128`, where it could never wrap, would cost 1,921,064 instead of 1,080,000, and the
-    depth would come to about 2,384,000, too close to half of the cap.
+    depth would come to 2,569,064, over half of the cap.
+  - A transaction can hold at most four closes, and each one after the first deepens the chain by 162,000, through
+    the pot of the season in progress. The keeper (T17) closes one season per transaction.
   - `FHE.sum` would add the shares for less than two `add`s, but it arrived only in a recent protocol release
     (Zama's changelog). The close keeps to long-supported operations, so that it works on Sepolia.
 

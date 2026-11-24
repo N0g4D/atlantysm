@@ -187,8 +187,8 @@ abstract contract GardenFixture is TestFhevm {
         return (x == WATER && y == FIRE) || (x == FIRE && y == EARTH) || (x == EARTH && y == WATER);
     }
 
-    /// What a season's pot holds, read with `plaintextOf` since nobody can decrypt it. 0 while its handle is still
-    /// empty, before any crystal attunes or is shattered in that season.
+    /// What a season's pot holds, read with `plaintextOf` since nobody can decrypt it. 0 while its handle is empty:
+    /// before anything is added to it, and once the season is closed.
     function _pot(uint256 season) internal returns (uint64) {
         euint64 pot = garden.potOf(season);
         return euint64.unwrap(pot) == 0 ? 0 : plaintextOf(pot);

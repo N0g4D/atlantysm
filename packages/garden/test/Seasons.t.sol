@@ -405,6 +405,68 @@ contract SeasonsTest is GardenFixture {
         _assertScore(1, top[1], 2, 0, 3);
     }
 
+    /**
+     * RULES.md §4 and §8: a shattered crystal's results still count, so a win of its published after the shatter
+     * moves it up, while its share stays in the centre. W1 and W2 win once each, W2 after W1, so W1 leads. W2 is
+     * shattered with its second win still pending; once published, W2 takes the first place from W1. At the close W1,
+     * second, takes 30% of the 101 MANA, and the first share stays in the centre with the rest.
+     */
+    function testAShatteredCrystalStillMovesUpOnALateWin() public {
+        uint256 w1 = _forgeElement(alice, WATER);
+        uint256 w2 = _forgeElement(bob, WATER);
+        uint256 fire = _forgeElement(carol, FIRE);
+        _publish(_fight(w1, fire));
+        _publish(_fight(w2, fire));
+        uint256 late = _fight(w2, fire);
+        _assertTop(1, w1, w2, 0, "before the shatter");
+
+        _shatter(bob, w2);
+        _publish(late);
+        _assertTop(1, w2, w1, 0, "the shattered crystal moves up");
+        _assertRecord(w2, 2, 0);
+        _shatterIntoThePot(1, 101);
+
+        _waitUntilClosable(1);
+        uint64 before = _balanceOf(w1, aliceKey);
+        _closeSeason(1);
+        assertEq(_balanceOf(w1, aliceKey) - before, 30, "the second share");
+        assertEq(_pot(2), 101 - 30, "the first and third shares stay in the centre");
+    }
+
+    /**
+     * The close follows the deployment's parameters: here a split that gives the whole centre to the first place, and
+     * no close delay. The season can then be closed the moment it ends: the first takes all 101 MANA, the second and
+     * third take nothing, and nothing is carried over. A duel fought in the season's last second cannot be published
+     * by then, so its result counts only in the records (RULES.md §8): a deployment needs a delay long enough to
+     * decrypt and publish a result.
+     */
+    function testAnotherSplitAndNoDelay() public {
+        Garden.Params memory params = _seasonZero();
+        params.prizeShares = [100, 0, 0];
+        params.seasonCloseDelay = 0;
+        garden = new Garden(params);
+        uint256[3] memory top = _rankThree();
+        _shatterIntoThePot(1, 101);
+        uint256 lateWinner = _forgeElement(carol, WATER);
+        uint256 lateLoser = _forgeElement(alice, FIRE);
+        vm.warp(_seasonEnd(1) - 1);
+        uint256 late = _fight(lateWinner, lateLoser);
+
+        vm.warp(_seasonEnd(1));
+        uint256[3] memory keys = [bobKey, carolKey, aliceKey];
+        uint64[3] memory before = _balances(top, keys);
+        _closeSeason(1);
+        uint64[3] memory gained = _gains(top, keys, before);
+        assertEq(gained[0], 101, "the whole centre");
+        assertEq(gained[1], 0, "nothing for the second");
+        assertEq(gained[2], 0, "nothing for the third");
+        assertEq(_pot(2), 0, "nothing carried over");
+
+        _publish(late);
+        _assertTop(1, top[0], top[1], top[2], "the last duel does not count");
+        _assertRecord(lateWinner, 1, 0);
+    }
+
     /// SEASON0.md §2.2, Close a season: the centre that a closed season keeps back goes to the season in progress, even
     /// when the close comes late. Season 1, closed in season 3, carries its 101 MANA to season 3's centre, and season 2's
     /// stays as it was.
