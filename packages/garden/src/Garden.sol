@@ -36,6 +36,10 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
         uint64 maxStake;
         /// How long a lobby must wait before its creator can cancel it, in seconds.
         uint256 lobbyTimeout;
+        /// How long after a season ends it can be closed, in seconds: time to publish its last duels.
+        uint256 seasonCloseDelay;
+        /// The percent of a closed season's centre credited to each of its top three crystals, first place first.
+        uint8[3] prizeShares;
     }
 
     /// SEASON0.md §2.1. A crystal's handles are granted to this contract and to its owner only.
@@ -87,6 +91,24 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
         ebool creatorWins;
     }
 
+    /// A crystal's wins and losses counted in one season, and the latest of those wins (RULES.md §8).
+    struct Score {
+        uint32 wins;
+        uint32 losses;
+        /// The id of the latest duel, in the order duels were fought, among the wins counted so far: when the crystal
+        /// reached its score. Duel ids grow by one per join, so they never outgrow 64 bits.
+        uint64 lastWin;
+    }
+
+    /// SEASON0.md §2.1. Everything about a season is public but its pot, which `_pots` holds.
+    struct Season {
+        /// The three best crystals, best first: the most wins, then the first to reach them. 0 marks an empty place,
+        /// and places fill from the first. A crystal shattered since keeps its place.
+        uint256[3] top;
+        bool closed;
+        mapping(uint256 tokenId => Score) scores;
+    }
+
     /// What anyone can read about a crystal: its public fields, and the handles that only its owner can decrypt.
     struct CrystalView {
         address owner;
@@ -116,6 +138,12 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
     uint64 public immutable MAX_STAKE;
     /// The creator of a lobby nobody has joined can cancel it this long after opening it (RULES.md §7).
     uint256 public immutable LOBBY_TIMEOUT;
+    /// A season can be closed this long after it ends (RULES.md §8).
+    uint256 public immutable SEASON_CLOSE_DELAY;
+    /// The percent of a closed season's centre that its first, second and third crystals receive (RULES.md §8).
+    uint8 public immutable FIRST_SHARE;
+    uint8 public immutable SECOND_SHARE;
+    uint8 public immutable THIRD_SHARE;
     /// The deployment time, when season 1 starts.
     uint256 public immutable GENESIS;
     /// An encrypted zero that only this contract holds, drawn at construction. A value that must be unreachable starts
@@ -131,7 +159,8 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
     uint256 public lastDuelId;
 
     mapping(uint256 tokenId => Crystal) internal _crystals;
-    /// The centre (RULES.md §8), one pot per season. Only this contract can use a pot: nobody may read its total.
+    /// The centre (RULES.md §8), one pot per season. Only this contract can use a pot: nobody may read its total. A
+    /// closed season's pot has been paid out, and is empty.
     mapping(uint256 season => euint64) internal _pots;
     /// Every input handle `attune` has accepted. A handle sits in the calldata, so the same one twice would show
     /// everyone that two attunements made the same choice.
@@ -139,6 +168,7 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
     mapping(uint256 tokenId => Record) internal _records;
     mapping(uint256 lobbyId => Lobby) internal _lobbies;
     mapping(uint256 duelId => Duel) internal _duels;
+    mapping(uint256 season => Season) internal _seasons;
 
     // Public data only (SEASON0.md §2.3, rule 2).
     event Forged(uint256 indexed tokenId, address indexed owner);
@@ -156,6 +186,8 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
         uint256 season
     );
     event DuelPublished(uint256 indexed duelId, uint256 indexed winner, uint256 indexed loser);
+    /// The season's top three, 0 for an empty place. The centre's total and the shares stay encrypted.
+    event SeasonClosed(uint256 indexed season, uint256 first, uint256 second, uint256 third);
 
     error InvalidParams();
     error WrongCharge();
@@ -170,6 +202,9 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
     error TooEarlyToCancel();
     error UnknownDuel();
     error AlreadyPublished();
+    error UnknownSeason();
+    error TooEarlyToClose();
+    error AlreadyClosed();
 
     constructor(Params memory params) ERC721("Atlantysm Crystal", "CRYSTAL") {
         // Accrual credits one MANA every SECONDS_PER_MANA, so a day must divide into whole steps (SEASON0.md §2.2).
@@ -186,7 +221,14 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
         // come back within reach (RULES.md §3, invariant 1).
         bool arena = params.minStake != 0 && params.minStake <= params.maxStake
             && params.maxStake <= type(uint64).max / 2 && params.lobbyTimeout <= params.seasonLength;
-        if (params.charge == 0 || !wholeSteps || params.seasonLength == 0 || !levels || !arena) {
+        // The centre goes to the top three in full (RULES.md §8), so the shares add up to 100, and what a closed season
+        // keeps back, the shares nobody takes and what rounding leaves, is never negative. No place takes more than the
+        // one above it. And the close delay may not outlast a season, so that a season's prize is always within reach
+        // before the next season ends.
+        uint8[3] memory shares = params.prizeShares;
+        bool seasons = uint256(shares[0]) + shares[1] + shares[2] == 100 && shares[0] >= shares[1]
+            && shares[1] >= shares[2] && params.seasonCloseDelay <= params.seasonLength;
+        if (params.charge == 0 || !wholeSteps || params.seasonLength == 0 || !levels || !arena || !seasons) {
             revert InvalidParams();
         }
         CHARGE = params.charge;
@@ -198,6 +240,10 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
         MIN_STAKE = params.minStake;
         MAX_STAKE = params.maxStake;
         LOBBY_TIMEOUT = params.lobbyTimeout;
+        SEASON_CLOSE_DELAY = params.seasonCloseDelay;
+        FIRST_SHARE = shares[0];
+        SECOND_SHARE = shares[1];
+        THIRD_SHARE = shares[2];
         GENESIS = block.timestamp;
         // Zero, whatever the draw. Nobody else is ever allowed on the draw, so nobody else can reproduce the handle.
         GARDEN_ZERO = FHE.allowThis(FHE.and(FHE.randEuint64(), 0));
@@ -393,7 +439,8 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
     /**
      * @notice Publishes a duel's outcome with the proof of its public decryption. Anyone can, once per duel, so no
      *         player can stall a result by staying away (RULES.md §7). The result counts in both crystals' lifetime
-     *         records, also when one of them has been shattered since.
+     *         records, also when one of them has been shattered since, and in the ranking of the season the duel was
+     *         fought in, unless that season is closed (RULES.md §8).
      * @param creatorWon The decrypted outcome: whether the crystal that opened the lobby won.
      * @param proof      The KMS signatures over the stored outcome handle and this value.
      */
@@ -414,7 +461,64 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
             creatorWon ? (duel.creatorCrystal, duel.challengerCrystal) : (duel.challengerCrystal, duel.creatorCrystal);
         _records[winner].wins++;
         _records[loser].losses++;
+        // A duel counts for the season it was fought in until that season is closed, and afterwards only in the records.
+        Season storage season = _seasons[duel.season];
+        if (!season.closed) {
+            Score storage score = season.scores[winner];
+            score.wins++;
+            // The latest win by duel id, not by publication: ids grow as duels are fought, so this is when the crystal
+            // reached its score, whatever order the results come in.
+            if (duelId > score.lastWin) score.lastWin = uint64(duelId);
+            season.scores[loser].losses++;
+            _rank(season, winner);
+        }
         emit DuelPublished(duelId, winner, loser);
+    }
+
+    // -- Seasons (RULES.md §8) ---------------------------------------------------------------------------------
+
+    /**
+     * @notice Closes a season from SEASON_CLOSE_DELAY after it ends, and credits its centre to its top three crystals
+     *         in encrypted shares. Anyone can, once per season. A share with no crystal to take it, for an empty place
+     *         or a crystal shattered since, stays in the centre for the season in progress. The centre's total is never
+     *         published: each winner can read only its own balance.
+     */
+    function closeSeason(uint256 season) external {
+        if (season == 0) revert UnknownSeason();
+        uint256 current = currentSeason();
+        // The season in progress, and any later one, has not ended. An earlier one ended in the past, so subtracting its
+        // end from now cannot underflow, and no season number can overflow.
+        if (season >= current || block.timestamp - (GENESIS + season * SEASON_LENGTH) < SEASON_CLOSE_DELAY) {
+            revert TooEarlyToClose();
+        }
+        Season storage closing = _seasons[season];
+        if (closing.closed) revert AlreadyClosed();
+        // Closed, and its pot emptied, before any FHE call (SEASON0.md §2.3, rule 6). Nothing adds to a past season's pot,
+        // so the pot read here is all there is, and below it goes to the winners and to the season in progress.
+        closing.closed = true;
+        euint64 pot = _potOf(season);
+        _pots[season] = euint64.wrap(0);
+
+        euint64 rest = pot;
+        for (uint256 place; place < 3; ++place) {
+            uint256 tokenId = closing.top[place];
+            // An empty place, or a crystal shattered since, has no owner, and its share stays in the rest. Both are
+            // public, so the branch reveals nothing (SEASON0.md §2.3, rule 1).
+            address owner = _ownerOf(tokenId);
+            if (owner == address(0)) continue;
+            // pot × share fits in 64 bits while the pot holds less than 2^64 / 100 MANA. A pot holds at most the MANA
+            // ever accrued: at one MANA a second, the fastest rate the constructor allows, a million crystals would take
+            // 5,800 years to accrue that much. The shares are floors of fractions that add up to one, so together they
+            // never exceed the pot, and the rest never wraps.
+            euint64 share = FHE.div(FHE.mul(pot, _shareOf(place)), 100);
+            Crystal storage crystal = _crystals[tokenId];
+            crystal.mana = _seal(FHE.add(_accrue(crystal), share), owner);
+            rest = FHE.sub(rest, share);
+        }
+        // To the season in progress, which cannot be closed yet, rather than to `season + 1`, which a late close may find
+        // already closed.
+        _pots[current] = FHE.allowThis(FHE.add(_potOf(current), rest));
+        emit SeasonClosed(season, closing.top[0], closing.top[1], closing.top[2]);
     }
 
     // -- Views -------------------------------------------------------------------------------------------------
@@ -513,9 +617,33 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
         return (block.timestamp - GENESIS) / SEASON_LENGTH + 1;
     }
 
-    /// The handle of a season's pot, 0 until a crystal attunes or is shattered in that season. Nobody can decrypt it.
+    /// The handle of a season's pot, 0 until a crystal attunes or is shattered in that season, and 0 again once the
+    /// season is closed and its pot paid out. Nobody can decrypt it.
     function potOf(uint256 season) external view returns (euint64) {
         return _pots[season];
+    }
+
+    /**
+     * @notice A season's ranking (RULES.md §8): its three best crystals, best first, their wins in the season, and
+     *         whether the season is closed. An empty place is 0. A crystal shattered since keeps its place.
+     */
+    function rankingOf(uint256 season)
+        external
+        view
+        returns (uint256[3] memory crystals, uint32[3] memory wins, bool closed)
+    {
+        Season storage s = _seasons[season];
+        crystals = s.top;
+        for (uint256 place; place < 3; ++place) {
+            wins[place] = s.scores[crystals[place]].wins;
+        }
+        closed = s.closed;
+    }
+
+    /// A crystal's wins and losses counted in a season, and the id of the latest duel among those wins, which breaks
+    /// ties in the ranking. All zero for a crystal that has nothing counted there.
+    function scoreOf(uint256 season, uint256 tokenId) external view returns (Score memory) {
+        return _seasons[season].scores[tokenId];
     }
 
     // -- Internal ----------------------------------------------------------------------------------------------
@@ -568,6 +696,42 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
         ebool coin = FHE.randEbool();
         ebool mirror = FHE.select(FHE.eq(a.level, b.level), coin, FHE.gt(a.level, b.level));
         return FHE.select(same, mirror, aBeatsB);
+    }
+
+    /**
+     * @dev SEASON0.md §2.2, Publish: places `winner`, which has just won, among the season's top three. A crystal's key,
+     *      its wins and then its latest counted win, changes only when it wins, and then it improves. So the top three
+     *      stay exact if the winner moves up past every crystal it is now ahead of, coming in through the first empty
+     *      place or in place of the third, and no other crystal needs to be looked at.
+     */
+    function _rank(Season storage season, uint256 winner) internal {
+        uint256[3] memory top = season.top;
+        // The winner's place if it is ranked, else the first empty place, else 3: outside a full top three.
+        uint256 place;
+        while (place < 3 && top[place] != winner && top[place] != 0) ++place;
+        if (place == 3) {
+            if (!_ahead(season, winner, top[2])) return;
+            place = 2;
+        }
+        while (place > 0 && _ahead(season, winner, top[place - 1])) {
+            top[place] = top[place - 1];
+            --place;
+        }
+        top[place] = winner;
+        season.top = top;
+    }
+
+    /// Whether `a` ranks ahead of `b` in the season: more wins, or as many reached first (RULES.md §8). Two ranked
+    /// crystals never tie: each duel has one winner, so no two crystals share their latest counted win.
+    function _ahead(Season storage season, uint256 a, uint256 b) internal view returns (bool) {
+        Score storage x = season.scores[a];
+        Score storage y = season.scores[b];
+        return x.wins > y.wins || (x.wins == y.wins && x.lastWin < y.lastWin);
+    }
+
+    /// The percent of the centre that the crystal in `place`, 0 for the first, receives.
+    function _shareOf(uint256 place) internal view returns (uint64) {
+        return place == 0 ? FIRST_SHARE : place == 1 ? SECOND_SHARE : THIRD_SHARE;
     }
 
     /**

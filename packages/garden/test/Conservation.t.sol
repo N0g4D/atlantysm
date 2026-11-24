@@ -10,11 +10,13 @@ import {GardenFixture} from "./utils/GardenFixture.sol";
 
 /**
  * @dev Drives Garden through random sequences of forging, attuning, shattering, opening, cancelling and joining lobbies,
- *      publishing duels and waiting, one transaction per call. It keeps its own plaintext model of what should hold,
- *      worked out from the rules alone: which crystals are live, the level and MANA of each, what each season's pot
- *      holds, which lobbies are open and what their creators put up, and every crystal's record. Two inputs come from
- *      Garden's draws, because only Garden makes them: each crystal's element, and the coin of a mirror between equal
- *      levels, read from the executor's event rather than from the outcome.
+ *      publishing duels, closing seasons and waiting, one transaction per call. It keeps its own plaintext model of what
+ *      should hold, worked out from the rules alone: which crystals are live, the level and MANA of each, what each
+ *      season's pot holds, which lobbies are open and what their creators put up, every crystal's record, and each
+ *      season's scores, ranking and whether it is closed. The ranking is worked out by sorting every crystal with a
+ *      win, not by inserting winners as Garden does. Two inputs come from Garden's draws, because only Garden makes them:
+ *      each crystal's element, and the coin of a mirror between equal levels, read from the executor's event rather than
+ *      from the outcome.
  */
 contract GardenHandler is CommonBase, StdUtils {
     /// RULES.md §12. Copies rather than Garden's own values, so that what the handler expects does not rest on the
@@ -26,6 +28,7 @@ contract GardenHandler is CommonBase, StdUtils {
     uint64 internal constant MIN_STAKE = 10;
     uint64 internal constant MAX_STAKE = 100;
     uint256 internal constant LOBBY_TIMEOUT = 24 hours;
+    uint256 internal constant SEASON_CLOSE_DELAY = 1 hours;
     /// The executor's event for a random value: the coprocessor draws the coin from it, and the handler reads it back.
     bytes32 internal constant FHE_RAND = keccak256("FheRand(address,uint8,bytes16,bytes32)");
 
@@ -34,6 +37,15 @@ contract GardenHandler is CommonBase, StdUtils {
         uint64 stake;
         uint256 openedAt;
         bool paid;
+    }
+
+    /// A crystal's wins and losses counted in a season (RULES.md §8).
+    struct Score {
+        uint256 wins;
+        uint256 losses;
+        /// The duel in which the crystal reached its score: the latest of its counted wins, in the order duels were
+        /// fought.
+        uint256 reachedIn;
     }
 
     Garden internal immutable garden;
@@ -70,6 +82,16 @@ contract GardenHandler is CommonBase, StdUtils {
     uint256 public stakesMoved;
     uint256 public published;
 
+    mapping(uint256 tokenId => bool) internal alive;
+    mapping(uint256 season => mapping(uint256 tokenId => Score)) internal scores;
+    /// The crystals with a win counted in each season, in no order.
+    mapping(uint256 season => uint256[]) internal ranked;
+    mapping(uint256 season => bool) public closed;
+    uint256 public closes;
+    /// The shares credited to a living winner, and the results published after their season was closed.
+    uint256 public sharesPaid;
+    uint256 public publishedLate;
+
     constructor(Garden garden_, GardenFixture fixture_, address[] memory actors_) {
         garden = garden_;
         fixture = fixture_;
@@ -83,6 +105,7 @@ contract GardenHandler is CommonBase, StdUtils {
         vm.prank(actor);
         uint256 tokenId = garden.forge{value: charge}();
         live.push(tokenId);
+        alive[tokenId] = true;
         forgedAt[tokenId] = block.timestamp;
         lastCreditAt[tokenId] = block.timestamp;
         levelOf[tokenId] = 1;
@@ -116,6 +139,7 @@ contract GardenHandler is CommonBase, StdUtils {
         uint256 tokenId = live[index];
         live[index] = live[live.length - 1];
         live.pop();
+        alive[tokenId] = false;
         _credit(tokenId);
         potOf[_season()] += manaOf[tokenId];
         creditedToShattered += (block.timestamp - forgedAt[tokenId]) / SECONDS_PER_MANA;
@@ -213,7 +237,8 @@ contract GardenHandler is CommonBase, StdUtils {
         duels++;
     }
 
-    /// RULES.md §7: anyone publishes, here an outsider, and the result the model expects counts in both records.
+    /// RULES.md §7 and §8: anyone publishes, here an outsider, and the result the model expects counts in both records,
+    /// and in the season the duel was fought in unless that season is closed.
     function publish(uint256 duelSeed) external {
         if (pendingDuels.length == 0) return;
         uint256 index = bound(duelSeed, 0, pendingDuels.length - 1);
@@ -226,9 +251,59 @@ contract GardenHandler is CommonBase, StdUtils {
 
         Garden.Duel memory duel = garden.duelOf(duelId);
         bool aWins = creatorShouldWin[duelId];
-        winsOf[aWins ? duel.creatorCrystal : duel.challengerCrystal]++;
-        lossesOf[aWins ? duel.challengerCrystal : duel.creatorCrystal]++;
+        (uint256 winner, uint256 loser) =
+            aWins ? (duel.creatorCrystal, duel.challengerCrystal) : (duel.challengerCrystal, duel.creatorCrystal);
+        winsOf[winner]++;
+        lossesOf[loser]++;
         published++;
+
+        if (closed[duel.season]) {
+            publishedLate++;
+            return;
+        }
+        Score storage score = scores[duel.season][winner];
+        if (score.wins == 0) ranked[duel.season].push(winner);
+        score.wins++;
+        if (duelId > score.reachedIn) score.reachedIn = duelId;
+        scores[duel.season][loser].losses++;
+    }
+
+    /**
+     * @notice RULES.md §8: anyone closes a season from an hour after it ends, here the first season the seed finds that
+     *         may be closed. Its centre goes 50%, 30% and 20%, rounded down, to each of its top three that still exists,
+     *         and the rest to the season in progress.
+     */
+    function closeSeason(uint256 seasonSeed) external {
+        uint256 current = _season();
+        if (current < 2) return;
+        uint256 start = bound(seasonSeed, 1, current - 1);
+        uint256 season;
+        for (uint256 i; i < current - 1 && season == 0; i++) {
+            uint256 candidate = 1 + (start - 1 + i) % (current - 1);
+            if (!closed[candidate] && block.timestamp >= genesis + candidate * SEASON_LENGTH + SEASON_CLOSE_DELAY) {
+                season = candidate;
+            }
+        }
+        if (season == 0) return;
+        vm.prank(address(0xC1053));
+        garden.closeSeason(season);
+
+        closed[season] = true;
+        closes++;
+        uint256[3] memory top = topOf(season);
+        uint256 pot = potOf[season];
+        uint256 paid;
+        for (uint256 place; place < 3; place++) {
+            uint256 tokenId = top[place];
+            if (tokenId == 0 || !alive[tokenId]) continue;
+            uint256 share = pot * (place == 0 ? 50 : place == 1 ? 30 : 20) / 100;
+            _credit(tokenId);
+            manaOf[tokenId] += share;
+            paid += share;
+            sharesPaid++;
+        }
+        potOf[season] = 0;
+        potOf[current] += pot - paid;
     }
 
     /// Up to two days at a time, so that runs cross from one season into the next.
@@ -247,6 +322,33 @@ contract GardenHandler is CommonBase, StdUtils {
 
     function paidOf(uint256 lobbyId) external view returns (bool) {
         return lobbies[lobbyId].paid;
+    }
+
+    /// RULES.md §8, worked out by sorting every crystal with a win counted in the season: the most wins first, and of
+    /// two with as many, the one that reached its score in the earlier duel. 0 for a place nobody takes.
+    function topOf(uint256 season) public view returns (uint256[3] memory top) {
+        uint256[] memory candidates = ranked[season];
+        bool[] memory taken = new bool[](candidates.length);
+        for (uint256 place; place < 3; place++) {
+            uint256 best = type(uint256).max;
+            for (uint256 i; i < candidates.length; i++) {
+                if (taken[i]) continue;
+                if (best == type(uint256).max) {
+                    best = i;
+                    continue;
+                }
+                Score memory x = scores[season][candidates[i]];
+                Score memory y = scores[season][candidates[best]];
+                if (x.wins > y.wins || (x.wins == y.wins && x.reachedIn < y.reachedIn)) best = i;
+            }
+            if (best == type(uint256).max) break;
+            taken[best] = true;
+            top[place] = candidates[best];
+        }
+    }
+
+    function scoreOf(uint256 season, uint256 tokenId) external view returns (Score memory) {
+        return scores[season][tokenId];
     }
 
     /**
@@ -402,6 +504,31 @@ contract ConservationTest is GardenFixture {
         }
     }
 
+    /// RULES.md §8: every season's top three, the wins shown for them, whether it is closed, and every crystal's score in
+    /// it are what the rules give for the same sequence of calls, worked out by the handler by sorting every crystal
+    /// with a win rather than by inserting each winner.
+    /// forge-config: default.invariant.runs = 64
+    /// forge-config: default.invariant.depth = 64
+    /// forge-config: default.invariant.fail-on-revert = true
+    function invariant_seasonsFollowTheRules() public view {
+        for (uint256 season = 1; season <= garden.currentSeason(); season++) {
+            (uint256[3] memory crystals, uint32[3] memory wins, bool closed) = garden.rankingOf(season);
+            uint256[3] memory expected = handler.topOf(season);
+            for (uint256 place; place < 3; place++) {
+                assertEq(crystals[place], expected[place], "a place in the ranking");
+                assertEq(wins[place], handler.scoreOf(season, expected[place]).wins, "its wins");
+            }
+            assertEq(closed, handler.closed(season), "closed");
+            for (uint256 id = 1; id <= garden.lastTokenId(); id++) {
+                Garden.Score memory score = garden.scoreOf(season, id);
+                GardenHandler.Score memory model = handler.scoreOf(season, id);
+                assertEq(score.wins, model.wins, "season wins");
+                assertEq(score.losses, model.losses, "season losses");
+                assertEq(score.lastWin, model.reachedIn, "latest counted win");
+            }
+        }
+    }
+
     /// The invariants hold on a known sequence through the handler, one that takes every path of its model: a rise,
     /// a refused rise, a hold, a rise into the next season's pot, and a shatter after a rise. Random runs explore
     /// further, but nothing guarantees that a given run reaches a rise.
@@ -424,6 +551,7 @@ contract ConservationTest is GardenFixture {
         invariant_manaIsConserved();
         invariant_levelsManaAndPotsFollowTheRules();
         invariant_lobbiesAndRecordsFollowTheRules();
+        invariant_seasonsFollowTheRules();
     }
 
     /// The same for the Arena: a duel whose stakes move, one where only the creator covers the stake, one where neither
@@ -478,6 +606,75 @@ contract ConservationTest is GardenFixture {
         invariant_manaIsConserved();
         invariant_levelsManaAndPotsFollowTheRules();
         invariant_lobbiesAndRecordsFollowTheRules();
+        invariant_seasonsFollowTheRules();
+    }
+
+    /**
+     * The same for seasons. Five duels are fought in season 1 among six crystals, and the rises of two of them fill its
+     * centre. Duels 1, 5 and 4 are published in season 1, out of the order they were fought, and duel 3 in season 2,
+     * before season 1 is closed. Then the crystal ranked first is shattered, so its share stays in the centre, and
+     * season 1 is closed. Duel 2 is published after the close and counts only in the records. A duel of season 2 is
+     * published, a crystal attunes, and season 2 is closed a season late, from season 3. The handler publishes the
+     * pending duel at the index given, and moves the last pending duel into its place.
+     */
+    function testTheInvariantsHoldOnAKnownSeasonSequence() public {
+        for (uint256 i; i < 6; i++) {
+            handler.forge(i);
+        }
+        handler.wait(1 days);
+        // Lobby and crystal seeds are indices among the open lobbies and the free crystals.
+        handler.openLobby(0, 10);
+        handler.joinLobby(0, 1);
+        handler.openLobby(2, 10);
+        handler.joinLobby(0, 3);
+        handler.openLobby(4, 10);
+        handler.joinLobby(0, 5);
+        handler.openLobby(0, 10);
+        handler.joinLobby(0, 2);
+        handler.openLobby(1, 10);
+        handler.joinLobby(0, 3);
+        handler.attune(0, true);
+        handler.attune(1, true);
+        // Pending duels 1 to 5: publishing at index 0 takes duel 1, then 5, then 4.
+        handler.publish(0);
+        handler.publish(0);
+        handler.publish(0);
+
+        handler.wait(2 days);
+        assertEq(garden.currentSeason(), 2);
+        handler.publish(0);
+        uint256 first = handler.topOf(1)[0];
+        uint256[] memory live = handler.liveCrystals();
+        for (uint256 i; i < live.length; i++) {
+            if (live[i] == first) handler.shatter(i);
+        }
+        handler.wait(1 hours);
+        handler.closeSeason(0);
+        assertEq(handler.closes(), 1, "season 1 closed");
+        handler.publish(0);
+        assertEq(handler.publishedLate(), 1, "duel 2, after the close");
+
+        handler.openLobby(0, 10);
+        handler.joinLobby(0, 1);
+        handler.publish(0);
+        handler.attune(0, true);
+        handler.wait(2 days);
+        handler.wait(2 days);
+        assertEq(garden.currentSeason(), 3);
+        handler.closeSeason(0);
+
+        assertEq(handler.closes(), 2, "season 2 closed from season 3");
+        assertEq(handler.published(), 6, "published");
+        assertGt(handler.sharesPaid(), 0, "shares paid");
+        assertEq(_pot(1), 0, "season 1's centre paid out");
+        assertEq(_pot(2), 0, "season 2's centre paid out");
+        assertGt(_pot(3), 0, "what season 2 kept back, in season 3");
+
+        invariant_theBalanceIsTheChargeOfEveryLiveCrystal();
+        invariant_manaIsConserved();
+        invariant_levelsManaAndPotsFollowTheRules();
+        invariant_lobbiesAndRecordsFollowTheRules();
+        invariant_seasonsFollowTheRules();
     }
 
     /// The stakes the open lobbies hold, read from Garden: each creator's stake if it put it up.

@@ -42,7 +42,7 @@ request ticks its task here.
 - [x] **T05 · Lobbies and duels.** `openLobby` with the stake bounds, `cancelLobby`, `joinLobby` and `publish`, built
   from the spike, with locks and lifetime records.
   *Done when* the tests cover `RULES.md` §7 and the adversarial cases in `SEASON0.md` §5.
-- [ ] **T06 · Seasons.** The season index from deployment, wins and losses per season, the top three with
+- [x] **T06 · Seasons.** The season index from deployment, wins and losses per season, the top three with
   tie-breaks, the close delay, `closeSeason` with encrypted shares, and the rollover.
   *Done when* the tests cover `RULES.md` §8.
 - [ ] **T07 · Transfers.** The lock check, and sealing the crystal again for its new owner.

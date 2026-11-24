@@ -32,18 +32,31 @@ contract HcuTest is GardenFixture {
      */
     function setUp() public override {
         super.setUp();
+        // setUp is one transaction, and the scaffolding below, thirteen forges and four duels, would outgrow the
+        // per-transaction cap that several transactions on chain would share. The meter still runs, and every test
+        // compares its one call with half of each cap, which is stricter than the cap itself.
+        disableHCULimits();
         crystal = _forge(alice);
         challenger = _forge(bob);
         uint256 creator = _forge(alice);
         uint256 canceller = _forge(alice);
         uint256[2] memory duellists = [_forge(alice), _forge(bob)];
+        uint256[6] memory ranked = [_forge(alice), _forge(bob), _forge(alice), _forge(bob), _forge(alice), _forge(bob)];
         // A day later, so that every crystal covers its stake and a rise is paid for.
         _wait(1 days);
         lobbyToJoin = _openLobby(creator, STAKE);
         lobbyToCancel = _openLobby(canceller, STAKE);
         duelToPublish = _duel(duellists[0], duellists[1], STAKE);
-        // Another day, so that the lobby may be cancelled, and every measured call credits real MANA.
+        // Three duels between six other crystals, published in season 1, give it three winners, and a rise puts MANA in
+        // its centre: closing it pays all three shares, the most it can do.
+        for (uint256 i; i < 3; i++) {
+            _publish(_duel(ranked[2 * i], ranked[2 * i + 1], STAKE));
+        }
+        _attune(alice, ranked[0], true);
+        // Another day, so that the lobby may be cancelled, and every measured call credits real MANA. Then season 1
+        // may be closed, and every other call runs in season 2, whose centre is still empty.
         _wait(LOBBY_TIMEOUT);
+        _waitUntilClosable(1);
         (rise, riseProof) = encryptBool(true, address(garden), alice);
     }
 
@@ -104,6 +117,18 @@ contract HcuTest is GardenFixture {
         emit log_named_uint("publish: HCU depth", hcu.maxHandle);
         assertEq(hcu.transaction, 0);
         assertEq(hcu.maxHandle, 0);
+    }
+
+    /// The most a close can do: three living winners, each credited its share. Fewer winners run fewer operations, and
+    /// what the centre holds changes nothing (Seasons.t.sol shows it).
+    function testClosingASeasonStaysUnderHalfOfEachCap() public {
+        uint256[3] memory top = _top(1);
+        for (uint256 place; place < 3; place++) {
+            assertTrue(top[place] != 0 && garden.ownerOf(top[place]) != address(0), "a living winner");
+        }
+        resetHCU();
+        _closeSeason(1);
+        _assertWithinBudget("closeSeason", lastHCU());
     }
 
     /// Not an external function, but a transaction with FHE work: the constructor draws GARDEN_ZERO.
