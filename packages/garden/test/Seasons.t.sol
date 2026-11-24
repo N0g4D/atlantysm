@@ -222,7 +222,7 @@ contract SeasonsTest is GardenFixture {
     }
 
     /// RULES.md §8: a duel counts for the season in which it was fought, once its result is published, even when that
-    /// happens in the next season. Until then it does not count anywhere.
+    /// happens in the next season, within the close delay: here ten minutes in. Until then it does not count anywhere.
     function testADuelCountsForTheSeasonItWasFought() public {
         uint256 water = _forgeElement(alice, WATER);
         uint256 fire = _forgeElement(bob, FIRE);
@@ -240,29 +240,84 @@ contract SeasonsTest is GardenFixture {
     }
 
     /**
-     * RULES.md §8: results published after their season is closed count only in the crystals' records, not in that
-     * season's ranking nor in the next one's. A result published after the season ended but before it was closed
-     * still counts, however long after.
+     * RULES.md §8, as amended in #15: a duel counts for the season it was fought in if its result is published within
+     * SEASON_CLOSE_DELAY of the season's end. A result published later counts only in the crystals' records, whether
+     * or not anyone has closed the season yet. Three results of season 1: the one published a second before the delay
+     * runs out counts. The one published at that second, with nobody having closed the season, does not, and neither
+     * does the one published after the close. None counts for season 2.
      */
-    function testResultsPublishedAfterTheCloseCountOnlyInTheRecords() public {
+    function testAResultCountsOnlyWithinTheCloseDelay() public {
         uint256 water = _forgeElement(alice, WATER);
         uint256 fire = _forgeElement(bob, FIRE);
         uint256 earth = _forgeElement(carol, EARTH);
-        uint256 beforeClose = _fight(water, fire);
-        uint256 afterClose = _fight(earth, water);
+        // Water beats Fire, Earth beats Water, Fire beats Earth.
+        uint256 inTime = _fight(water, fire);
+        uint256 atTheDelay = _fight(earth, water);
+        uint256 afterTheClose = _fight(fire, earth);
 
-        vm.warp(_seasonEnd(1) + 2 days);
-        _publish(beforeClose);
+        vm.warp(_seasonEnd(1) + SEASON_CLOSE_DELAY - 1);
+        _publish(inTime);
+        vm.warp(_seasonEnd(1) + SEASON_CLOSE_DELAY);
+        _publish(atTheDelay);
+        (,, bool closed) = garden.rankingOf(1);
+        assertFalse(closed, "nobody has closed the season yet");
         _closeSeason(1);
-        _publish(afterClose);
+        _publish(afterTheClose);
 
         _assertTop(1, water, 0, 0, "season 1");
         _assertTop(2, 0, 0, 0, "season 2");
-        _assertScore(1, water, 1, 0, beforeClose);
+        _assertScore(1, water, 1, 0, inTime);
+        _assertScore(1, fire, 0, 1, 0);
         _assertScore(1, earth, 0, 0, 0);
         _assertScore(2, earth, 0, 0, 0);
-        _assertRecord(earth, 1, 0);
         _assertRecord(water, 1, 1);
+        _assertRecord(earth, 1, 1);
+        _assertRecord(fire, 1, 1);
+    }
+
+    /**
+     * RULES.md §8, as amended in #15: the ranking is final once the delay after the season's end runs out, and from
+     * then on anyone can close the season with the same outcome, whoever closes it and whenever. Three Water crystals
+     * are ranked, and Earth has two wins pending, over the second and the third, that would put it third. Its results
+     * miss the delay.
+     * - In one branch, the third place's owner closes the season at the first moment, and Earth's results come after.
+     * - In the other, Earth's results come first, and a stranger closes the season a day later.
+     * Both pay the same three crystals the same shares of the 753 MANA, and Earth's wins count only in its record.
+     */
+    function testTheOutcomeIsTheSameWhoeverClosesAndWhenever() public {
+        uint256[3] memory top = _rankThree();
+        uint256 earth = _forgeElement(bob, EARTH);
+        uint256[2] memory pending = [_fight(earth, top[2]), _fight(earth, top[1])];
+        _shatterIntoThePot(3, 251);
+        uint256[3] memory keys = [bobKey, carolKey, aliceKey];
+        uint256 fought = vm.snapshotState();
+
+        _waitUntilClosable(1);
+        uint64[3] memory before = _balances(top, keys);
+        vm.prank(alice);
+        garden.closeSeason(1);
+        uint64[3] memory atOnce = _gains(top, keys, before);
+        _publish(pending[0]);
+        _publish(pending[1]);
+        _assertTop(1, top[0], top[1], top[2], "closed at once");
+
+        assertTrue(vm.revertToState(fought));
+        _waitUntilClosable(1);
+        _publish(pending[0]);
+        _publish(pending[1]);
+        _assertTop(1, top[0], top[1], top[2], "Earth's results came too late");
+        _wait(1 days);
+        before = _balances(top, keys);
+        _closeSeason(1);
+        uint64[3] memory aDayLater = _gains(top, keys, before);
+
+        uint64[3] memory expected = [uint64(376), 225, 150];
+        for (uint256 place; place < 3; place++) {
+            assertEq(atOnce[place], expected[place], "closed at once: the share");
+            assertEq(aDayLater[place], expected[place], "closed a day later: the same share");
+        }
+        _assertScore(1, earth, 0, 0, 0);
+        _assertRecord(earth, 2, 0);
     }
 
     // -- Closing --------------------------------------------------------------------------------------------
@@ -436,9 +491,9 @@ contract SeasonsTest is GardenFixture {
     /**
      * The close follows the deployment's parameters: here a split that gives the whole centre to the first place, and
      * no close delay. The season can then be closed the moment it ends: the first takes all 101 MANA, the second and
-     * third take nothing, and nothing is carried over. A duel fought in the season's last second cannot be published
-     * by then, so its result counts only in the records (RULES.md §8): a deployment needs a delay long enough to
-     * decrypt and publish a result.
+     * third take nothing, and nothing is carried over. With no delay, a result counts only if published before the
+     * season ends (RULES.md §8). A duel fought in the season's last second cannot be decrypted and published by then,
+     * so its result counts only in the records: a deployment needs a delay long enough to decrypt and publish one.
      */
     function testAnotherSplitAndNoDelay() public {
         Garden.Params memory params = _seasonZero();

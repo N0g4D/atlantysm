@@ -439,8 +439,8 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
     /**
      * @notice Publishes a duel's outcome with the proof of its public decryption. Anyone can, once per duel, so no
      *         player can stall a result by staying away (RULES.md §7). The result counts in both crystals' lifetime
-     *         records, also when one of them has been shattered since, and in the ranking of the season the duel was
-     *         fought in, unless that season is closed (RULES.md §8).
+     *         records, also when one of them has been shattered since. It also counts in the ranking of the season the
+     *         duel was fought in, if it is published within SEASON_CLOSE_DELAY of that season's end (RULES.md §8).
      * @param creatorWon The decrypted outcome: whether the crystal that opened the lobby won.
      * @param proof      The KMS signatures over the stored outcome handle and this value.
      */
@@ -461,9 +461,11 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
             creatorWon ? (duel.creatorCrystal, duel.challengerCrystal) : (duel.challengerCrystal, duel.creatorCrystal);
         _records[winner].wins++;
         _records[loser].losses++;
-        // A duel counts for the season it was fought in until that season is closed, and afterwards only in the records.
-        Season storage season = _seasons[duel.season];
-        if (!season.closed) {
+        // RULES.md §8: a duel counts for the season it was fought in until the season can be closed, SEASON_CLOSE_DELAY
+        // after it ends, and afterwards only in the records. So no close can come before a result that counts: the
+        // ranking is final once the season can be closed, whoever closes it and whenever.
+        if (!_closable(duel.season)) {
+            Season storage season = _seasons[duel.season];
             Score storage score = season.scores[winner];
             score.wins++;
             // The latest win by duel id, not by publication: ids grow as duels are fought, so this is when the crystal
@@ -479,18 +481,15 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
 
     /**
      * @notice Closes a season from SEASON_CLOSE_DELAY after it ends, and credits its centre to its top three crystals
-     *         in encrypted shares. Anyone can, once per season. A share with no crystal to take it, for an empty place
+     *         in encrypted shares. Anyone can, once per season. Its ranking is final by then, so whoever closes it, and
+     *         whenever, pays the same crystals the same shares. A share with no crystal to take it, for an empty place
      *         or a crystal shattered since, stays in the centre for the season in progress. The centre's total is never
      *         published: each winner can read only its own balance.
      */
     function closeSeason(uint256 season) external {
         if (season == 0) revert UnknownSeason();
+        if (!_closable(season)) revert TooEarlyToClose();
         uint256 current = currentSeason();
-        // The season in progress, and any later one, has not ended. An earlier one ended in the past, so subtracting its
-        // end from now cannot underflow, and no season number can overflow.
-        if (season >= current || block.timestamp - (GENESIS + season * SEASON_LENGTH) < SEASON_CLOSE_DELAY) {
-            revert TooEarlyToClose();
-        }
         Season storage closing = _seasons[season];
         if (closing.closed) revert AlreadyClosed();
         // Closed, and its pot emptied, before any FHE call (SEASON0.md §2.3, rule 6). Nothing adds to a past season's pot,
@@ -727,6 +726,15 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
         Score storage x = season.scores[a];
         Score storage y = season.scores[b];
         return x.wins > y.wins || (x.wins == y.wins && x.lastWin < y.lastWin);
+    }
+
+    /**
+     * @dev Whether `season` ended at least SEASON_CLOSE_DELAY ago (RULES.md §8): from then on it can be closed, and its
+     *      results count only in the records. The season in progress, or a later one, has not ended. An earlier one
+     *      ended in the past, so subtracting its end from now cannot underflow, and no season number can overflow.
+     */
+    function _closable(uint256 season) internal view returns (bool) {
+        return season < currentSeason() && block.timestamp - (GENESIS + season * SEASON_LENGTH) >= SEASON_CLOSE_DELAY;
     }
 
     /// The percent of the centre that the crystal in `place`, 0 for the first, receives.

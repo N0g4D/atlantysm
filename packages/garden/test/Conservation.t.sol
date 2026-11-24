@@ -88,7 +88,7 @@ contract GardenHandler is CommonBase, StdUtils {
     mapping(uint256 season => uint256[]) internal ranked;
     mapping(uint256 season => bool) public closed;
     uint256 public closes;
-    /// The shares credited to a living winner, and the results published after their season was closed.
+    /// The shares credited to a living winner, and the results published too late to count for their season.
     uint256 public sharesPaid;
     uint256 public publishedLate;
 
@@ -238,7 +238,7 @@ contract GardenHandler is CommonBase, StdUtils {
     }
 
     /// RULES.md §7 and §8: anyone publishes, here an outsider, and the result the model expects counts in both records,
-    /// and in the season the duel was fought in unless that season is closed.
+    /// and in the season the duel was fought in if it comes within the close delay of that season's end.
     function publish(uint256 duelSeed) external {
         if (pendingDuels.length == 0) return;
         uint256 index = bound(duelSeed, 0, pendingDuels.length - 1);
@@ -257,7 +257,9 @@ contract GardenHandler is CommonBase, StdUtils {
         lossesOf[loser]++;
         published++;
 
-        if (closed[duel.season]) {
+        // Later than an hour after the season's end, whether or not anyone has closed it, a result counts only in the
+        // records.
+        if (block.timestamp >= genesis + duel.season * SEASON_LENGTH + SEASON_CLOSE_DELAY) {
             publishedLate++;
             return;
         }
@@ -610,10 +612,11 @@ contract ConservationTest is GardenFixture {
     }
 
     /**
-     * The same for seasons. Five duels are fought in season 1 among six crystals, and the rises of two of them fill its
-     * centre. Duels 1, 5 and 4 are published in season 1, out of the order they were fought, and duel 3 in season 2,
-     * before season 1 is closed. Then the crystal ranked first is shattered, so its share stays in the centre, and
-     * season 1 is closed. Duel 2 is published after the close and counts only in the records. A duel of season 2 is
+     * The same for seasons. Six duels are fought in season 1 among six crystals, and the rises of two of them fill its
+     * centre. Duels 1, 6 and 5 are published in season 1, out of the order they were fought, and duel 4 as season 2
+     * begins, within the close delay. Then the crystal ranked first is shattered, so its share stays in the centre.
+     * Duel 3 is published once the delay has run out, before anyone closes the season, and counts only in the records;
+     * season 1 is closed, and duel 2, published after the close, counts only in the records too. A duel of season 2 is
      * published, a crystal attunes, and season 2 is closed a season late, from season 3. The handler publishes the
      * pending duel at the index given, and moves the last pending duel into its place.
      */
@@ -633,9 +636,11 @@ contract ConservationTest is GardenFixture {
         handler.joinLobby(0, 2);
         handler.openLobby(1, 10);
         handler.joinLobby(0, 3);
+        handler.openLobby(4, 10);
+        handler.joinLobby(0, 5);
         handler.attune(0, true);
         handler.attune(1, true);
-        // Pending duels 1 to 5: publishing at index 0 takes duel 1, then 5, then 4.
+        // Pending duels 1 to 6: publishing at index 0 takes duel 1, then 6, then 5.
         handler.publish(0);
         handler.publish(0);
         handler.publish(0);
@@ -643,16 +648,19 @@ contract ConservationTest is GardenFixture {
         handler.wait(2 days);
         assertEq(garden.currentSeason(), 2);
         handler.publish(0);
+        assertEq(handler.publishedLate(), 0, "duel 4, within the delay");
         uint256 first = handler.topOf(1)[0];
         uint256[] memory live = handler.liveCrystals();
         for (uint256 i; i < live.length; i++) {
             if (live[i] == first) handler.shatter(i);
         }
         handler.wait(1 hours);
+        handler.publish(0);
+        assertEq(handler.publishedLate(), 1, "duel 3, after the delay and before the close");
         handler.closeSeason(0);
         assertEq(handler.closes(), 1, "season 1 closed");
         handler.publish(0);
-        assertEq(handler.publishedLate(), 1, "duel 2, after the close");
+        assertEq(handler.publishedLate(), 2, "duel 2, after the close");
 
         handler.openLobby(0, 10);
         handler.joinLobby(0, 1);
@@ -664,7 +672,7 @@ contract ConservationTest is GardenFixture {
         handler.closeSeason(0);
 
         assertEq(handler.closes(), 2, "season 2 closed from season 3");
-        assertEq(handler.published(), 6, "published");
+        assertEq(handler.published(), 7, "published");
         assertGt(handler.sharesPaid(), 0, "shares paid");
         assertEq(_pot(1), 0, "season 1's centre paid out");
         assertEq(_pot(2), 0, "season 2's centre paid out");

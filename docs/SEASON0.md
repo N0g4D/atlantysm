@@ -192,9 +192,12 @@ checkSignatures([duel.creatorWins], abi.encode(creatorWon), proof)
 ```
 
 Check only the stored handle, never one the caller passes. Set `published` before the check, which reverts the whole
-call if it fails. Then update both lifetime records, also for a crystal shattered since the duel. If the duel's season
-is not closed yet, also count its win and loss for that season and place the winner in the top three. Once the season
-is closed, the result counts only in the records.
+call if it fails. Then update both lifetime records, also for a crystal shattered since the duel. If the result comes
+within `SEASON_CLOSE_DELAY` of the end of the duel's season (`block.timestamp < seasonEnd + SEASON_CLOSE_DELAY`, the
+season in progress included), also count its win and loss for that season and place the winner in the top three.
+Later, it counts only in the records, whether or not anyone has closed the season (`RULES.md` §8 as amended in #15).
+A season can be closed only from that same moment, so a result that counts always comes before any close: the
+ranking is final once the season can be closed, whoever closes it and whenever. `publish` does not read `closed`.
 
 The ranking key is the season's wins, then the latest counted win's duel id, lower first. The latest counted win is
 the highest duel id among the crystal's counted wins, not the one published last. Duel ids grow as duels are fought,
@@ -207,9 +210,9 @@ so this is "reached the score first" in `RULES.md` §8, whatever order results a
   three stay exact without scanning every crystal.
 - **No tie-break on losses.** It would break insertion: a ranked crystal that lost could fall below one nobody tracks.
 
-**Close a season** `(season)` — anyone, once, from `SEASON_CLOSE_DELAY` after the season ends. Mark the season closed
-and empty its pot before any encrypted operation. Nothing adds to a past season's pot, so the pot read then is all
-there is.
+**Close a season** `(season)` — anyone, once, from `SEASON_CLOSE_DELAY` after the season ends, when its ranking has
+become final (*Publish*, above). Mark the season closed and empty its pot before any encrypted operation. Nothing adds
+to a past season's pot, so the pot read then is all there is.
 
 ```
 rest = pot                                        // from GARDEN_ZERO if nobody paid into it
@@ -331,8 +334,9 @@ Refined so far:
     - a place that takes more than the one above it;
     - a close delay longer than a season, which would hold a prize back past the end of the next season.
 
-    A zero delay is accepted, but then a season can be closed the moment it ends, before its last duels can be
-    decrypted and published, and those count only in the records. A deployment needs a delay that covers both (T09).
+    A zero delay is accepted, but then a result counts only if it comes before the season ends, and a season's last
+    duels cannot be decrypted and published by then: they count only in the records. A deployment needs a delay that
+    covers both (T09).
   - **Seasons.** `closeSeason(season)` emits `SeasonClosed`. It reverts with:
     - `UnknownSeason` for season 0;
     - `TooEarlyToClose` for the season in progress, a later one, or one that ended less than `SEASON_CLOSE_DELAY` ago.
@@ -429,8 +433,8 @@ Every function is measured on `Garden` (`packages/garden/test/Hcu.t.sol`). Deplo
 ## 3. Toolchain
 
 - **Solidity:** solc 0.8.24, EVM `cancun`, the optimizer on at 200 runs; Foundry 1.7.1, pinned in CI.
-  - Every FHE call inlines its checks. At T06, `Garden` is 19,234 bytes with the optimizer, of the 24,576 allowed, so
-    5,342 are left for T07. Without the optimizer it would be 31,785 and could not be deployed, so the optimizer is not
+  - Every FHE call inlines its checks. At T06, `Garden` is 19,262 bytes with the optimizer, of the 24,576 allowed, so
+    5,314 are left for T07. Without the optimizer it would be 31,805 and could not be deployed, so the optimizer is not
     optional. At T05 the two figures were 16,662 and 27,824, and at T04 11,442 and 19,632.
   - Verification on Etherscan (T09) must use the same settings.
 - **Contract packages:** `@fhevm/solidity` ^0.13.4, `encrypted-types` ^0.0.4 (which `FHE.sol` imports, so every
