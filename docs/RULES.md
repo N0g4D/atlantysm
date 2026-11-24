@@ -141,17 +141,17 @@ MANA and record.
 
 **Ranking.** Crystals are ranked by Arena wins in the season. Ties go to whoever reached the score first, counting
 duels in the order they were fought. A duel counts for the season in which it was fought if its result is published
-within **1 hour** of the season's end *(parameter)*; a result published later counts only in the crystals' records.
-The ranking is final at that hour, and from then on anyone can close the season: whoever closes it, and whenever,
-the outcome is the same.
+less than **1 hour** after the season ends *(parameter)*; a result published later counts only in the crystals'
+records. The ranking is final at that hour, and from then on anyone can close the season: whoever closes it, the
+same crystals take the same shares.
 
 **The prize.** When a season is closed, the centre is credited to the top three crystals in encrypted shares:
 **50%, 30% and 20%** *(parameter)*, each rounded down. Its total is never published: with few players, it would
 reveal what individual crystals had spent. Each winner sees only its own share, and since the split is fixed, it can
 work out the total from that share once the season is closed, to within a few MANA because of the rounding. Nobody
 else can, unless it already knows the total from its own payments (§6); and whoever knows the total knows every
-share. A share with no crystal to take it, because fewer than three were ranked or one has been shattered, stays in
-the centre for the season in progress, with what the rounding leaves.
+share. A share with no crystal to take it, because fewer than three were ranked or one was shattered before the
+close, stays in the centre for the season in progress at the close, with what the rounding leaves.
 
 **Known weaknesses.** A player with several crystals can duel themselves to inflate their wins, and no on-chain
 ranking can rule that out entirely. A lobby's creator can also refuse any challenger: it sees the challenger's
