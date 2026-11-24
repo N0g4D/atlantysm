@@ -83,7 +83,8 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
     struct Duel {
         uint256 creatorCrystal;
         uint256 challengerCrystal;
-        /// The season the duel was fought in, which it counts for once published (RULES.md §8).
+        /// The season the duel was fought in, which it counts for if published within SEASON_CLOSE_DELAY of that
+        /// season's end (RULES.md §8).
         uint256 season;
         uint64 stake;
         bool published;
@@ -138,7 +139,8 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
     uint64 public immutable MAX_STAKE;
     /// The creator of a lobby nobody has joined can cancel it this long after opening it (RULES.md §7).
     uint256 public immutable LOBBY_TIMEOUT;
-    /// A season can be closed this long after it ends (RULES.md §8).
+    /// This long after a season ends, its results stop counting for it, and from then on it can be closed (RULES.md
+    /// §8).
     uint256 public immutable SEASON_CLOSE_DELAY;
     /// The percent of a closed season's centre that its first, second and third crystals receive (RULES.md §8).
     uint8 public immutable FIRST_SHARE;
@@ -481,10 +483,10 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
 
     /**
      * @notice Closes a season from SEASON_CLOSE_DELAY after it ends, and credits its centre to its top three crystals
-     *         in encrypted shares. Anyone can, once per season. Its ranking is final by then, so whoever closes it, and
-     *         whenever, pays the same crystals the same shares. A share with no crystal to take it, for an empty place
-     *         or a crystal shattered since, stays in the centre for the season in progress. The centre's total is never
-     *         published: each winner can read only its own balance.
+     *         in encrypted shares. Anyone can, once per season. Its ranking is final by then, so whoever closes it pays
+     *         the same places the same shares. A share with no crystal to take it, for an empty place or a crystal
+     *         shattered by the time of the close, stays in the centre for the season in progress at the close, with what
+     *         rounding leaves. The centre's total is never published: each winner can read only its own balance.
      */
     function closeSeason(uint256 season) external {
         if (season == 0) revert UnknownSeason();

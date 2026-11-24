@@ -282,7 +282,10 @@ contract SeasonsTest is GardenFixture {
      * miss the delay.
      * - In one branch, the third place's owner closes the season at the first moment, and Earth's results come after.
      * - In the other, Earth's results come first, and a stranger closes the season a day later.
-     * Both pay the same three crystals the same shares of the 753 MANA, and Earth's wins count only in its record.
+     * Both pay the same three crystals the same shares of the 753 MANA, and Earth's wins count only in its record. Both
+     * closes fall in season 2, with every winner alive. When a close comes still decides where what the season keeps
+     * back goes (`testTheRestGoesToTheSeasonInProgress`), and a winner shattered before the close leaves its share in the
+     * centre (`testAShatteredWinnersShareStaysInTheCentre`).
      */
     function testTheOutcomeIsTheSameWhoeverClosesAndWhenever() public {
         uint256[3] memory top = _rankThree();

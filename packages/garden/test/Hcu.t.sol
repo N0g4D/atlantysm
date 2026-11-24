@@ -20,11 +20,14 @@ contract HcuTest is GardenFixture {
     uint256 internal crystal;
     externalEbool internal rise;
     bytes internal riseProof;
-    /// A lobby for Bob's crystal to join, one for its creator to cancel, and a duel to publish.
+    /// A lobby for Bob's crystal to join, one for its creator to cancel, and two duels to publish: one of season 1, whose
+    /// close delay has run out, so its result counts only in the records, and one of season 2, whose result still counts
+    /// for its season.
     uint256 internal challenger;
     uint256 internal lobbyToJoin;
     uint256 internal lobbyToCancel;
     uint256 internal duelToPublish;
+    uint256 internal duelToRank;
 
     /**
      * @dev Everything a measured call reads is made here. A forge test is one transaction, so a handle made in the
@@ -33,7 +36,7 @@ contract HcuTest is GardenFixture {
      */
     function setUp() public override {
         super.setUp();
-        // setUp is one transaction, and the scaffolding below, twelve forges and four duels, would outgrow the
+        // setUp is one transaction, and the scaffolding below, twelve forges and five duels, would outgrow the
         // per-transaction cap that several transactions on chain would share. The meter still runs, and every test
         // compares its one call with half of each cap, which is stricter than the cap itself.
         disableHCULimits();
@@ -58,6 +61,7 @@ contract HcuTest is GardenFixture {
         // may be closed, and every other call runs in season 2, whose centre is still empty.
         _wait(LOBBY_TIMEOUT);
         _waitUntilClosable(1);
+        duelToRank = _duel(ranked[2], ranked[3], STAKE);
         (rise, riseProof) = encryptBool(true, address(garden), alice);
     }
 
@@ -107,17 +111,14 @@ contract HcuTest is GardenFixture {
         _assertWithinBudget("cancelLobby", lastHCU(), 350_064, 295_000);
     }
 
-    /// Publishing checks the KMS signatures, which costs gas, not HCU: no encrypted operation runs.
+    /// Publishing checks the KMS signatures, which costs gas, not HCU: no encrypted operation runs, whether the result
+    /// counts for its season, which ranks the winner, or only in the records.
     function testPublishingRunsNoEncryptedOperation() public {
-        (bool creatorWon, bytes memory proof) = decryptPublicWithSignatures(garden.duelOf(duelToPublish).creatorWins);
-        resetHCU();
-        vm.prank(stranger);
-        garden.publish(duelToPublish, creatorWon, proof);
-        FhevmHCUMeter memory hcu = lastHCU();
-        emit log_named_uint("publish: HCU per transaction", hcu.transaction);
-        emit log_named_uint("publish: HCU depth", hcu.maxHandle);
-        assertEq(hcu.transaction, 0);
-        assertEq(hcu.maxHandle, 0);
+        _assertPublishRunsNoEncryptedOperation(duelToRank, "publish, counted for its season");
+        assertTrue(_top(2)[0] != 0, "the result counted for season 2");
+        uint256[3] memory ranked = _top(1);
+        _assertPublishRunsNoEncryptedOperation(duelToPublish, "publish, in the records only");
+        assertEq(keccak256(abi.encode(_top(1))), keccak256(abi.encode(ranked)), "season 1's ranking did not move");
     }
 
     /// The most a close can do: three living winners, each credited its share. Fewer winners run fewer operations, and
@@ -137,6 +138,18 @@ contract HcuTest is GardenFixture {
         resetHCU();
         new Garden(_seasonZero());
         _assertWithinBudget("deployment", lastHCU(), 58_000, 58_000);
+    }
+
+    function _assertPublishRunsNoEncryptedOperation(uint256 duelId, string memory name) internal {
+        (bool creatorWon, bytes memory proof) = decryptPublicWithSignatures(garden.duelOf(duelId).creatorWins);
+        resetHCU();
+        vm.prank(stranger);
+        garden.publish(duelId, creatorWon, proof);
+        FhevmHCUMeter memory hcu = lastHCU();
+        emit log_named_uint(string.concat(name, ": HCU per transaction"), hcu.transaction);
+        emit log_named_uint(string.concat(name, ": HCU depth"), hcu.maxHandle);
+        assertEq(hcu.transaction, 0, string.concat(name, ": HCU per transaction"));
+        assertEq(hcu.maxHandle, 0, string.concat(name, ": HCU depth"));
     }
 
     /// Below half of each cap, and exactly the row of SEASON0.md §2.6.

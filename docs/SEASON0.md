@@ -8,7 +8,7 @@
 | Path | What it is |
 |---|---|
 | `packages/garden` | Foundry project. `Garden.sol` implements every rule of `RULES.md` and holds every encrypted value. |
-| `packages/garden/script` | The Sepolia deployment script and the keeper, which publishes duels and closes seasons. |
+| `packages/garden/script` | The Sepolia deployment script and the keeper, which publishes duels and closes seasons. A result counts for its season only if published within `SEASON_CLOSE_DELAY` of the season's end, so the keeper publishes a season's duels before then. |
 | `packages/app` | The React client: Vite, wagmi, viem and Zama's React SDK. UI copy is Italian. |
 | `packages/contracts`, `packages/client` | The MUD MVP. Frozen: no new work, and not deployed for Season 0. Its notes (`docs/architecture.md`, `docs/tasks/`, `deploy_instructions.md`) describe the MVP only. |
 
@@ -183,7 +183,8 @@ covered it.
   settle it when it settles whether each side could cover the stake. A crystal forged too recently to have earned
   the stake cannot, and one that has never attuned has a balance others can often work out (`RULES.md` §5).
 
-The duel records the season in progress, which it counts for once published.
+The duel records the season in progress, which it counts for if published within `SEASON_CLOSE_DELAY` of that
+season's end (*Publish*, below).
 
 **Publish** `(duelId, bool creatorWon, bytes proof)` — anyone, once per duel.
 
@@ -226,6 +227,10 @@ pot[currentSeason] = add(pot[currentSeason], rest)
 - **The rest.** The shares of empty places and shattered crystals stay in `rest`, with what rounding leaves. It goes
   to the season in progress, which cannot be closed yet, rather than to `season + 1`, which may already be closed if
   this call comes late.
+- **What the timing still decides.** The ranking is final before any close, so whoever closes pays the same places the
+  same shares. Two things depend on when the close comes: which season in progress receives `rest`, and whether a
+  winner is still alive to take its share. A winner's owner who shatters it before the close leaves its share in
+  `rest`.
 - **No wrap.** `pot × pct` fits in 64 bits while the pot holds less than 2^64 / 100 MANA. A pot holds at most the
   MANA ever accrued: at one MANA a second, the fastest rate the constructor allows, a million crystals would take
   5,800 years to accrue that much. The shares are floors of fractions that add up to one, so together they never
@@ -415,7 +420,8 @@ Every function is measured on `Garden` (`packages/garden/test/Hcu.t.sol`). Deplo
 
     That is 213,968 less, at the same depth.
 - **`publish`.** No encrypted operation: checking the KMS signatures costs gas only. Since T06 it also counts the
-  result for its season and places the winner in the top three, in plaintext.
+  result for its season and places the winner in the top three, in plaintext. `Hcu.t.sol` measures both a result
+  that counts for its season and one that counts only in the records.
 - **`closeSeason`.** Measured with three living winners, the most a close can do. Fewer winners run fewer operations,
   and what the pot holds changes nothing (`Seasons.t.sol`).
   - Each share is a scalar `mul` (365,000) and then a scalar `div` (715,000) on `euint64`: 1,080,000, the longest
@@ -469,7 +475,9 @@ Every function is measured on `Garden` (`packages/garden/test/Hcu.t.sol`). Deplo
 - **Waiting is a state.** A mined receipt does not mean a result is ready. Every write shows a pending state until
   the new values decrypt, and errors are shown, not swallowed.
 - **Publishing.** For a pending duel, the app fetches the public decryption and its proof through the SDK and
-  calls `publish`. Any visitor can do it.
+  calls `publish`. Any visitor can do it. A result counts for its season only if published within
+  `SEASON_CLOSE_DELAY` of the season's end, so Classifica shows that deadline next to the countdown, and marks a past
+  season's pending result as counting only in the records once the deadline has passed.
 - **Reads** go through view functions. There is no indexer in Season 0.
 - **Headers.** Vercel serves the app with the COOP and COEP headers that let the FHE backend run multithreaded.
   Check that the wallet connectors still work with them before keeping them.
