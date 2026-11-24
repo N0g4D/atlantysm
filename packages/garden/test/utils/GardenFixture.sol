@@ -19,6 +19,10 @@ abstract contract GardenFixture is TestFhevm {
     /// A rise from level L costs 50 × L² MANA, up to level 10.
     uint64 internal constant LEVEL_COST = 50;
     uint8 internal constant MAX_LEVEL = 10;
+    /// An Arena stake is from 10 to 100 MANA, and a lobby nobody joins can be cancelled after a day.
+    uint64 internal constant MIN_STAKE = 10;
+    uint64 internal constant MAX_STAKE = 100;
+    uint256 internal constant LOBBY_TIMEOUT = 24 hours;
 
     uint8 internal constant FIRE = 0;
     uint8 internal constant EARTH = 1;
@@ -29,6 +33,10 @@ abstract contract GardenFixture is TestFhevm {
     /// The ACL's events for a persistent grant, and for handles made publicly decryptable.
     bytes32 internal constant ACL_ALLOWED = keccak256("Allowed(address,address,bytes32)");
     bytes32 internal constant ACL_PUBLIC = keccak256("AllowedForDecryption(address,bytes32[])");
+    /// The executor's event for an imported input. Its proof sits in the calldata anyway.
+    bytes32 internal constant VERIFY_INPUT = keccak256("VerifyInput(address,bytes32,address,bytes,uint8,bytes32)");
+    /// Stands in for a handle when two runs are compared: handles differ between any two runs, whatever the secrets.
+    bytes32 internal constant HANDLE = keccak256("a handle");
 
     /// A persistent ACL grant: `account` may use `handle`, and decrypt it if it is a user.
     struct Grant {
@@ -66,7 +74,10 @@ abstract contract GardenFixture is TestFhevm {
             manaPerDay: MANA_PER_DAY,
             seasonLength: SEASON_LENGTH,
             levelCost: LEVEL_COST,
-            maxLevel: MAX_LEVEL
+            maxLevel: MAX_LEVEL,
+            minStake: MIN_STAKE,
+            maxStake: MAX_STAKE,
+            lobbyTimeout: LOBBY_TIMEOUT
         });
     }
 
@@ -90,6 +101,83 @@ abstract contract GardenFixture is TestFhevm {
     /// The same encryption, for the conservation handler, which is not a test contract.
     function encryptChoice(bool rise, address owner) external returns (externalEbool, bytes memory) {
         return encryptBool(rise, address(garden), owner);
+    }
+
+    /// For the conservation handler: the test library's readings, which only a test contract can take.
+    function plaintextElement(uint256 tokenId) external returns (uint8) {
+        return plaintextOf(garden.crystalOf(tokenId).element);
+    }
+
+    function plaintextBool(ebool value) external returns (bool) {
+        return plaintextOf(value);
+    }
+
+    function outcomeWithProof(uint256 duelId) external returns (bool creatorWon, bytes memory proof) {
+        return decryptPublicWithSignatures(garden.duelOf(duelId).creatorWins);
+    }
+
+    // -- The Arena ------------------------------------------------------------------------------------------
+
+    /**
+     * @dev A crystal of `element` for `owner`. Nobody chooses an element (RULES.md §4), so this forges until the draw
+     *      gives it, reading each draw with `plaintextOf`. The misses stay with `owner`. A miss comes two times in
+     *      three, so 40 in a row would take a broken draw.
+     */
+    function _forgeElement(address owner, uint8 element) internal returns (uint256 tokenId) {
+        for (uint256 i; i < 40; i++) {
+            tokenId = _forge(owner);
+            if (plaintextOf(garden.crystalOf(tokenId).element) == element) return tokenId;
+        }
+        revert("the draw never gave the element");
+    }
+
+    /// The crystal's owner opens a lobby with it.
+    function _openLobby(uint256 tokenId, uint64 stake) internal returns (uint256 lobbyId) {
+        vm.prank(garden.ownerOf(tokenId));
+        lobbyId = garden.openLobby(tokenId, stake);
+    }
+
+    /// The crystal's owner joins the lobby with it, and the duel is fought.
+    function _join(uint256 lobbyId, uint256 tokenId) internal returns (uint256 duelId) {
+        vm.prank(garden.ownerOf(tokenId));
+        duelId = garden.joinLobby(lobbyId, tokenId);
+    }
+
+    /// `a` opens a lobby, `b` joins it.
+    function _duel(uint256 a, uint256 b, uint64 stake) internal returns (uint256 duelId) {
+        duelId = _join(_openLobby(a, stake), b);
+    }
+
+    function _cancel(uint256 lobbyId) internal {
+        vm.prank(garden.ownerOf(garden.lobbyOf(lobbyId).crystal));
+        garden.cancelLobby(lobbyId);
+    }
+
+    /// The stranger publishes the duel's outcome, with the proof of its public decryption, and returns it.
+    function _publish(uint256 duelId) internal returns (bool creatorWon) {
+        bytes memory proof;
+        (creatorWon, proof) = decryptPublicWithSignatures(garden.duelOf(duelId).creatorWins);
+        vm.prank(stranger);
+        garden.publish(duelId, creatorWon, proof);
+    }
+
+    /// What the owner reads of the crystal's balance as of now: the credited MANA, decrypted, and what has accrued
+    /// since.
+    function _balanceOf(uint256 tokenId, uint256 ownerKey) internal returns (uint64) {
+        Garden.CrystalView memory crystal = garden.crystalOf(tokenId);
+        return decrypt(crystal.mana, address(garden), ownerKey) + crystal.pendingMana;
+    }
+
+    function _assertRecord(uint256 tokenId, uint32 wins, uint32 losses) internal view {
+        (uint32 actualWins, uint32 actualLosses) = garden.recordOf(tokenId);
+        assertEq(actualWins, wins, "wins");
+        assertEq(actualLosses, losses, "losses");
+    }
+
+    /// RULES.md §7, as written there rather than as the contract computes it: Water beats Fire, Fire beats Earth,
+    /// Earth beats Water.
+    function _beats(uint8 x, uint8 y) internal pure returns (bool) {
+        return (x == WATER && y == FIRE) || (x == FIRE && y == EARTH) || (x == EARTH && y == WATER);
     }
 
     /// What a season's pot holds, read with `plaintextOf` since nobody can decrypt it. 0 while its handle is still
@@ -125,6 +213,14 @@ abstract contract GardenFixture is TestFhevm {
         return decryptPublic(value);
     }
 
+    function decryptBoolAs(ebool value, uint256 userKey) external returns (bool) {
+        return decrypt(value, address(garden), userKey);
+    }
+
+    function decryptBoolPublicly(ebool value) external returns (bool) {
+        return decryptPublic(value);
+    }
+
     function _assertCannotDecrypt(euint8 value, address user, uint256 userKey) internal {
         _expectNotAuthorized(euint8.unwrap(value), user);
         this.decryptUint8As(value, userKey);
@@ -133,6 +229,16 @@ abstract contract GardenFixture is TestFhevm {
     function _assertCannotDecrypt(euint64 value, address user, uint256 userKey) internal {
         _expectNotAuthorized(euint64.unwrap(value), user);
         this.decryptUint64As(value, userKey);
+    }
+
+    function _assertCannotDecrypt(ebool value, address user, uint256 userKey) internal {
+        _expectNotAuthorized(ebool.unwrap(value), user);
+        this.decryptBoolAs(value, userKey);
+    }
+
+    function _assertNotPublic(ebool value) internal {
+        _expectNotPublic(ebool.unwrap(value));
+        this.decryptBoolPublicly(value);
     }
 
     function _assertNotPublic(euint8 value) internal {
@@ -198,10 +304,98 @@ abstract contract GardenFixture is TestFhevm {
 
     /// No handle was made publicly decryptable (SEASON0.md §2.3, rule 4: only duel outcomes ever are).
     function _assertNothingPublic(Vm.Log[] memory logs) internal view {
+        assertEq(_madePublic(logs).length, 0, "a handle was made publicly decryptable");
+    }
+
+    /// Every persistent grant, in order, read from the ACL's `Allowed` events.
+    function _grantsIn(Vm.Log[] memory logs) internal view returns (Grant[] memory grants) {
+        address acl = getCoprocessorConfig(address(garden)).ACLAddress;
+        grants = new Grant[](logs.length);
+        uint256 n;
+        for (uint256 i; i < logs.length; i++) {
+            if (logs[i].emitter != acl || logs[i].topics.length == 0 || logs[i].topics[0] != ACL_ALLOWED) continue;
+            grants[n++] = Grant(address(uint160(uint256(logs[i].topics[2]))), abi.decode(logs[i].data, (bytes32)));
+        }
+        assembly ("memory-safe") {
+            mstore(grants, n)
+        }
+    }
+
+    /// Every handle made publicly decryptable, in order, read from the ACL's `AllowedForDecryption` events.
+    function _madePublic(Vm.Log[] memory logs) internal view returns (bytes32[] memory revealed) {
         address acl = getCoprocessorConfig(address(garden)).ACLAddress;
         for (uint256 i; i < logs.length; i++) {
-            bool reveal = logs[i].emitter == acl && logs[i].topics.length > 0 && logs[i].topics[0] == ACL_PUBLIC;
-            assertFalse(reveal, "a handle was made publicly decryptable");
+            if (logs[i].emitter != acl || logs[i].topics.length == 0 || logs[i].topics[0] != ACL_PUBLIC) continue;
+            bytes32[] memory batch = abi.decode(logs[i].data, (bytes32[]));
+            bytes32[] memory joined = new bytes32[](revealed.length + batch.length);
+            for (uint256 j; j < revealed.length; j++) {
+                joined[j] = revealed[j];
+            }
+            for (uint256 j; j < batch.length; j++) {
+                joined[revealed.length + j] = batch[j];
+            }
+            revealed = joined;
+        }
+    }
+
+    // -- What an outsider sees ------------------------------------------------------------------------------
+
+    /**
+     * @dev The logs of a call as an outsider can compare them with another run's: every handle masked, in the topics
+     *      and in every word of the data, since handles differ between any two runs whatever the secrets. Everything
+     *      else stays and must match: emitters, events, accounts granted, scalar operands, plaintexts encrypted, sizes.
+     *      An imported input's handle and proof are masked too: they sit in the calldata, and every encryption makes
+     *      new ones, whatever it encrypts. Masked as soon as the call is observed, because reverting to a snapshot later
+     *      takes the test library's plaintexts with it, and with them the means to tell a handle.
+     */
+    function _masked(Vm.Log[] memory logs) internal returns (Vm.Log[] memory) {
+        for (uint256 i; i < logs.length; i++) {
+            bytes32[] memory topics = logs[i].topics;
+            for (uint256 j; j < topics.length; j++) {
+                topics[j] = _maskHandle(topics[j]);
+            }
+            if (topics.length > 0 && topics[0] == VERIFY_INPUT) {
+                (, address user, bytes memory proof, uint8 inputType,) =
+                    abi.decode(logs[i].data, (bytes32, address, bytes, uint8, bytes32));
+                logs[i].data = abi.encode(HANDLE, user, new bytes(proof.length), inputType, HANDLE);
+                continue;
+            }
+            bytes memory data = logs[i].data;
+            for (uint256 offset; offset + 32 <= data.length; offset += 32) {
+                bytes32 word;
+                assembly ("memory-safe") {
+                    word := mload(add(add(data, 32), offset))
+                }
+                word = _maskHandle(word);
+                assembly ("memory-safe") {
+                    mstore(add(add(data, 32), offset), word)
+                }
+            }
+        }
+        return logs;
+    }
+
+    /// The values now in these slots of Garden's storage, every handle masked.
+    function _maskedValues(bytes32[] memory slots) internal returns (bytes32[] memory values) {
+        values = new bytes32[](slots.length);
+        for (uint256 i; i < slots.length; i++) {
+            values[i] = _maskHandle(vm.load(address(garden), slots[i]));
+        }
+    }
+
+    /// HANDLE if the word is a handle the test library holds a plaintext for, the word itself otherwise.
+    function _maskHandle(bytes32 word) internal returns (bytes32) {
+        return word != 0 && hasPlaintext(ebool.wrap(word)) ? HANDLE : word;
+    }
+
+    /// Two masked runs look the same from outside: the same logs, in order, equal in everything but handles.
+    function _assertSameLogs(Vm.Log[] memory a, Vm.Log[] memory b) internal pure {
+        assertEq(a.length, b.length, "number of logs");
+        for (uint256 i; i < a.length; i++) {
+            string memory at = string.concat("log ", vm.toString(i));
+            assertEq(a[i].emitter, b[i].emitter, string.concat(at, ": emitter"));
+            assertEq(a[i].topics, b[i].topics, string.concat(at, ": topics"));
+            assertEq(a[i].data, b[i].data, string.concat(at, ": data"));
         }
     }
 

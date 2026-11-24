@@ -24,8 +24,9 @@ contract SanctuaryTest is GardenFixture {
     /// What an outsider can observe of one attunement, and what its owner reads afterwards.
     struct Trace {
         Vm.Log[] logs;
-        /// Garden's storage slots written, in order.
+        /// Garden's storage slots written, in order, and the values they hold afterwards, handles masked.
         bytes32[] writes;
+        bytes32[] values;
         /// What the call cost, as its receipt would show.
         uint256 gas;
         FhevmHCUMeter hcu;
@@ -304,9 +305,10 @@ contract SanctuaryTest is GardenFixture {
      * - rise: hold, then rise. 150 MANA at level 1 cover the 50.
      * - refused: rise, then rise. 100 MANA at level 2 fall short of the 200.
      * - hold: hold, then hold.
-     * Outside they are the same: Garden's event, the storage slots it writes, every log in order with its emitter,
-     * signature and size, every grant, the gas and the HCU. Only handles differ, with the slot that marks each input
-     * used, and each attunement gives the level, the MANA and the pot new handles.
+     * Outside they are the same: Garden's event, the storage slots it writes and the public values in them, every log in
+     * order with every field but its handles (emitter, event, accounts granted, scalar operands, plaintexts encrypted),
+     * the gas and the HCU. Only handles differ, with the input and its proof, and the slot that marks each input used,
+     * and each attunement gives the level, the MANA and the pot new handles.
      */
     function testARiseARefusedRiseAndAHoldLookTheSameFromOutside() public {
         uint256 tokenId = _forge(alice);
@@ -410,12 +412,13 @@ contract SanctuaryTest is GardenFixture {
         t.gas = vm.lastCallGas().gasTotalUsed;
         t.hcu = lastHCU();
         (, bytes32[] memory writes) = vm.accesses(address(garden));
-        t.logs = vm.getRecordedLogs();
+        t.logs = _masked(vm.getRecordedLogs());
 
         // The slot that marks the input used comes from the input's handle, which every encryption makes anew, so it
         // differs between any two attunements. Every other write must be the same.
         t.writes = _without(writes, _usedSlot(externalEbool.unwrap(choice)));
         assertEq(t.writes.length, writes.length - 1, "the input marked used, once");
+        t.values = _maskedValues(t.writes);
 
         // Garden's one event, whatever happened: Attuned(tokenId).
         uint256 events;
@@ -465,28 +468,13 @@ contract SanctuaryTest is GardenFixture {
         assertEq(t.spent, spent, string.concat(name, ": spent"));
     }
 
-    function _assertSameFromOutside(Trace memory a, Trace memory b) internal view {
-        address acl = getCoprocessorConfig(address(garden)).ACLAddress;
+    function _assertSameFromOutside(Trace memory a, Trace memory b) internal pure {
         assertTrue(a.newLevel && a.newMana && a.newPot && b.newLevel && b.newMana && b.newPot, "new handles");
         assertEq(a.writes, b.writes, "storage slots written");
+        assertEq(a.values, b.values, "values written, handles masked");
         assertEq(a.gas, b.gas, "gas");
         assertEq(a.hcu.transaction, b.hcu.transaction, "HCU per transaction");
         assertEq(a.hcu.maxHandle, b.hcu.maxHandle, "HCU depth");
-
-        assertEq(a.logs.length, b.logs.length, "number of logs");
-        for (uint256 i; i < a.logs.length; i++) {
-            Vm.Log memory x = a.logs[i];
-            Vm.Log memory y = b.logs[i];
-            string memory at = string.concat("log ", vm.toString(i));
-            assertEq(x.emitter, y.emitter, string.concat(at, ": emitter"));
-            assertEq(x.topics.length, y.topics.length, string.concat(at, ": topics"));
-            assertEq(x.topics[0], y.topics[0], string.concat(at, ": event"));
-            assertEq(x.data.length, y.data.length, string.concat(at, ": data size"));
-            // Garden's own events carry public data only, so they are identical. The ACL's name the accounts granted.
-            if (x.emitter == address(garden)) assertEq(x.data, y.data, string.concat(at, ": Garden's data"));
-            if (x.emitter == address(garden) || x.emitter == acl) {
-                assertEq(x.topics, y.topics, string.concat(at, ": indexed fields"));
-            }
-        }
+        _assertSameLogs(a.logs, b.logs);
     }
 }

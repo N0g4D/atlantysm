@@ -31,6 +31,11 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
         uint64 levelCost;
         /// The highest level a crystal can reach.
         uint8 maxLevel;
+        /// The bounds of an Arena stake, in MANA.
+        uint64 minStake;
+        uint64 maxStake;
+        /// How long a lobby must wait before its creator can cancel it, in seconds.
+        uint256 lobbyTimeout;
     }
 
     /// SEASON0.md §2.1. A crystal's handles are granted to this contract and to its owner only.
@@ -39,6 +44,47 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
         euint8 level;
         euint64 mana; // whole MANA, credited up to lastAccrual
         uint64 lastAccrual;
+        /// The lobby the crystal waits in, 0 when none. A waiting crystal cannot be transferred, shattered or entered
+        /// in another lobby (RULES.md §4 and §7).
+        uint256 openLobby;
+    }
+
+    /// A crystal's lifetime wins and losses. Public and permanent (RULES.md §4), so kept apart from the crystal and
+    /// never deleted: they outlive a shattered crystal.
+    struct Record {
+        uint32 wins;
+        uint32 losses;
+    }
+
+    enum LobbyStatus {
+        None,
+        Open,
+        Cancelled,
+        Fought
+    }
+
+    /// SEASON0.md §2.1. Everything about a lobby is public except whether its creator could pay the stake.
+    struct Lobby {
+        /// The creator's crystal.
+        uint256 crystal;
+        uint64 stake;
+        uint64 openedAt;
+        LobbyStatus status;
+        /// Whether the creator's MANA covered the stake when the lobby opened. Granted to this contract alone. The creator
+        /// can recompute it in the opening block, from its own balance and the public stake, and learns only what it knew.
+        ebool creatorPaid;
+    }
+
+    /// SEASON0.md §2.1. The outcome is a handle until someone publishes it with its proof.
+    struct Duel {
+        uint256 creatorCrystal;
+        uint256 challengerCrystal;
+        /// The season the duel was fought in, which it counts for once published (RULES.md §8).
+        uint256 season;
+        uint64 stake;
+        bool published;
+        /// Whether the creator won: publicly decryptable, the only value a duel reveals (RULES.md §3, invariant 3).
+        ebool creatorWins;
     }
 
     /// What anyone can read about a crystal: its public fields, and the handles that only its owner can decrypt.
@@ -51,6 +97,10 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
         /// The MANA accrued since `lastAccrual` and not yet credited. It joins `mana` when the crystal next acts, so
         /// the balance as of now is `mana` plus this.
         uint64 pendingMana;
+        /// The lobby the crystal waits in, 0 when none.
+        uint256 openLobby;
+        uint32 wins;
+        uint32 losses;
     }
 
     uint256 public immutable CHARGE;
@@ -61,6 +111,11 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
     /// A rise from level L to L + 1 costs LEVEL_COST × L² MANA (RULES.md §6).
     uint64 public immutable LEVEL_COST;
     uint8 public immutable MAX_LEVEL;
+    /// An Arena stake is between MIN_STAKE and MAX_STAKE MANA, both included (RULES.md §7).
+    uint64 public immutable MIN_STAKE;
+    uint64 public immutable MAX_STAKE;
+    /// The creator of a lobby nobody has joined can cancel it this long after opening it (RULES.md §7).
+    uint256 public immutable LOBBY_TIMEOUT;
     /// The deployment time, when season 1 starts.
     uint256 public immutable GENESIS;
     /// An encrypted zero that only this contract holds, drawn at construction. A value that must be unreachable starts
@@ -71,6 +126,9 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
     uint256 public totalSupply;
     /// The id of the latest crystal forged. Ids start at 1 and are never reused.
     uint256 public lastTokenId;
+    /// The ids of the latest lobby opened and the latest duel fought. Both start at 1, so 0 means none.
+    uint256 public lastLobbyId;
+    uint256 public lastDuelId;
 
     mapping(uint256 tokenId => Crystal) internal _crystals;
     /// The centre (RULES.md §8), one pot per season. Only this contract can use a pot: nobody may read its total.
@@ -78,12 +136,26 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
     /// Every input handle `attune` has accepted. A handle sits in the calldata, so the same one twice would show
     /// everyone that two attunements made the same choice.
     mapping(bytes32 inputHandle => bool) internal _usedChoices;
+    mapping(uint256 tokenId => Record) internal _records;
+    mapping(uint256 lobbyId => Lobby) internal _lobbies;
+    mapping(uint256 duelId => Duel) internal _duels;
 
     // Public data only (SEASON0.md §2.3, rule 2).
     event Forged(uint256 indexed tokenId, address indexed owner);
     event Shattered(uint256 indexed tokenId);
     /// The same for a rise, a refused rise and a hold (RULES.md §6).
     event Attuned(uint256 indexed tokenId);
+    event LobbyOpened(uint256 indexed lobbyId, uint256 indexed tokenId, uint64 stake);
+    event LobbyCancelled(uint256 indexed lobbyId);
+    /// The same whether the stakes moved or not (RULES.md §7): the outcome stays a handle until it is published.
+    event DuelFought(
+        uint256 indexed duelId,
+        uint256 lobbyId,
+        uint256 indexed creatorCrystal,
+        uint256 indexed challengerCrystal,
+        uint256 season
+    );
+    event DuelPublished(uint256 indexed duelId, uint256 indexed winner, uint256 indexed loser);
 
     error InvalidParams();
     error WrongCharge();
@@ -92,6 +164,12 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
     error TransfersNotOpen();
     error MissingProof();
     error ChoiceReused();
+    error StakeOutOfBounds();
+    error CrystalWaiting();
+    error LobbyNotOpen();
+    error TooEarlyToCancel();
+    error UnknownDuel();
+    error AlreadyPublished();
 
     constructor(Params memory params) ERC721("Atlantysm Crystal", "CRYSTAL") {
         // Accrual credits one MANA every SECONDS_PER_MANA, so a day must divide into whole steps (SEASON0.md §2.2).
@@ -102,13 +180,24 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
         // maximum, so a wrap at the maximum itself would do no harm, but exact values are simpler to check.
         bool levels = params.maxLevel >= 2 && params.maxLevel <= 15 && params.levelCost != 0
             && uint256(params.levelCost) * params.maxLevel * params.maxLevel <= type(uint64).max;
-        if (params.charge == 0 || !wholeSteps || params.seasonLength == 0 || !levels) revert InvalidParams();
+        // A stake is never symbolic (RULES.md §7), and the bounds must leave a stake to choose. A duel's winner takes
+        // both stakes, encrypted from the public 2 × stake, which must fit in 64 bits. A crystal waiting in a lobby that
+        // nobody joins cannot be shattered before the timeout, so the timeout may not outlast a season: the charge must
+        // come back within reach (RULES.md §3, invariant 1).
+        bool arena = params.minStake != 0 && params.minStake <= params.maxStake
+            && params.maxStake <= type(uint64).max / 2 && params.lobbyTimeout <= params.seasonLength;
+        if (params.charge == 0 || !wholeSteps || params.seasonLength == 0 || !levels || !arena) {
+            revert InvalidParams();
+        }
         CHARGE = params.charge;
         MANA_PER_DAY = params.manaPerDay;
         SECONDS_PER_MANA = uint64(1 days / params.manaPerDay);
         SEASON_LENGTH = params.seasonLength;
         LEVEL_COST = params.levelCost;
         MAX_LEVEL = params.maxLevel;
+        MIN_STAKE = params.minStake;
+        MAX_STAKE = params.maxStake;
+        LOBBY_TIMEOUT = params.lobbyTimeout;
         GENESIS = block.timestamp;
         // Zero, whatever the draw. Nobody else is ever allowed on the draw, so nobody else can reproduce the handle.
         GARDEN_ZERO = FHE.allowThis(FHE.and(FHE.randEuint64(), 0));
@@ -147,6 +236,9 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
     function shatter(uint256 tokenId) external nonReentrant {
         // `ownerOf` reverts for a crystal that was never forged or is already shattered.
         if (ownerOf(tokenId) != msg.sender) revert NotOwner();
+        // RULES.md §4: a crystal waiting in an open lobby cannot be shattered. A challenger could still join, and the
+        // duel would have no crystal to fight with.
+        if (_crystals[tokenId].openLobby != 0) revert CrystalWaiting();
 
         // The MANA accrued so far goes with the rest (SEASON0.md §2.2), into the pot of the season in progress.
         uint256 season = currentSeason();
@@ -207,6 +299,124 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
         emit Attuned(tokenId);
     }
 
+    // -- The Arena (RULES.md §7) -------------------------------------------------------------------------------
+
+    /**
+     * @notice Opens a lobby with the sender's crystal and a public stake, from MIN_STAKE to MAX_STAKE MANA. The crystal
+     *         puts up the stake now, from its encrypted balance, if that covers it. One that cannot puts up nothing, and
+     *         the stakes of its duel will stay where they are. The duel itself looks the same from outside either way.
+     */
+    function openLobby(uint256 tokenId, uint64 stake) external returns (uint256 lobbyId) {
+        // `ownerOf` reverts for a crystal that was never forged or is already shattered.
+        address owner = ownerOf(tokenId);
+        if (owner != msg.sender) revert NotOwner();
+        Crystal storage crystal = _crystals[tokenId];
+        // A crystal waits in one open lobby at a time (RULES.md §7).
+        if (crystal.openLobby != 0) revert CrystalWaiting();
+        // The stake and its bounds are public, so the check reveals nothing.
+        if (stake < MIN_STAKE || stake > MAX_STAKE) revert StakeOutOfBounds();
+
+        euint64 mana = _accrue(crystal);
+        // Nothing reverts on the balance (SEASON0.md §2.3, rule 1): a crystal that cannot pay pays 0, and its MANA
+        // still gets a new handle.
+        ebool paid = FHE.ge(mana, stake);
+        crystal.mana = _seal(FHE.sub(mana, FHE.select(paid, FHE.asEuint64(stake), FHE.asEuint64(0))), owner);
+
+        lobbyId = ++lastLobbyId;
+        crystal.openLobby = lobbyId;
+        _lobbies[lobbyId] = Lobby({
+            crystal: tokenId,
+            stake: stake,
+            openedAt: uint64(block.timestamp),
+            status: LobbyStatus.Open,
+            creatorPaid: FHE.allowThis(paid)
+        });
+        emit LobbyOpened(lobbyId, tokenId, stake);
+    }
+
+    /**
+     * @notice Cancels a lobby that nobody has joined, from LOBBY_TIMEOUT after it opened, and gives the creator back
+     *         the stake it put up. Only the owner of the crystal waiting in it can.
+     */
+    function cancelLobby(uint256 lobbyId) external {
+        Lobby storage lobby = _lobbies[lobbyId];
+        if (lobby.status != LobbyStatus.Open) revert LobbyNotOpen();
+        uint256 tokenId = lobby.crystal;
+        // A waiting crystal cannot be transferred, so its owner is the one who opened the lobby.
+        address owner = ownerOf(tokenId);
+        if (owner != msg.sender) revert NotOwner();
+        // Subtracted rather than added, so that no timeout can overflow and lock the crystal.
+        if (block.timestamp - lobby.openedAt < LOBBY_TIMEOUT) revert TooEarlyToCancel();
+
+        lobby.status = LobbyStatus.Cancelled;
+        Crystal storage crystal = _crystals[tokenId];
+        crystal.openLobby = 0;
+        // The stake comes back only if it was paid. Either way the MANA gets a new handle, so nothing tells which.
+        euint64 refund = FHE.select(lobby.creatorPaid, FHE.asEuint64(lobby.stake), FHE.asEuint64(0));
+        crystal.mana = _seal(FHE.add(_accrue(crystal), refund), owner);
+        emit LobbyCancelled(lobbyId);
+    }
+
+    /**
+     * @notice Joins an open lobby with the sender's crystal, and the duel is fought at once. Elements and levels decide
+     *         the winner. The challenger puts up the stake now if its balance covers it, and the stakes change hands,
+     *         still encrypted, only if both crystals covered them. Only the outcome becomes publicly decryptable, for
+     *         anyone to `publish`.
+     */
+    function joinLobby(uint256 lobbyId, uint256 tokenId) external returns (uint256 duelId) {
+        Lobby storage lobby = _lobbies[lobbyId];
+        if (lobby.status != LobbyStatus.Open) revert LobbyNotOpen();
+        address challenger = ownerOf(tokenId);
+        if (challenger != msg.sender) revert NotOwner();
+        Crystal storage b = _crystals[tokenId];
+        // A waiting crystal cannot enter another lobby. This also refuses the creator's crystal, which waits in this one.
+        if (b.openLobby != 0) revert CrystalWaiting();
+
+        // The lobby closes, and the creator's crystal is free again, before the duel calls into the FHE executor and
+        // the ACL (SEASON0.md §2.3, rule 6).
+        uint256 creatorCrystal = lobby.crystal;
+        Crystal storage a = _crystals[creatorCrystal];
+        lobby.status = LobbyStatus.Fought;
+        a.openLobby = 0;
+
+        duelId = ++lastDuelId;
+        uint256 season = currentSeason();
+        Duel storage duel = _duels[duelId];
+        duel.creatorCrystal = creatorCrystal;
+        duel.challengerCrystal = tokenId;
+        duel.season = season;
+        duel.stake = lobby.stake;
+        duel.creatorWins = _fight(a, ownerOf(creatorCrystal), b, challenger, lobby.stake, lobby.creatorPaid);
+        emit DuelFought(duelId, lobbyId, creatorCrystal, tokenId, season);
+    }
+
+    /**
+     * @notice Publishes a duel's outcome with the proof of its public decryption. Anyone can, once per duel, so no
+     *         player can stall a result by staying away (RULES.md §7). The result counts in both crystals' lifetime
+     *         records, also when one of them has been shattered since.
+     * @param creatorWon The decrypted outcome: whether the crystal that opened the lobby won.
+     * @param proof      The KMS signatures over the stored outcome handle and this value.
+     */
+    function publish(uint256 duelId, bool creatorWon, bytes calldata proof) external {
+        if (duelId == 0 || duelId > lastDuelId) revert UnknownDuel();
+        Duel storage duel = _duels[duelId];
+        if (duel.published) revert AlreadyPublished();
+        // Marked before the proof is checked, so the call ends with effects done. A proof that fails reverts it all.
+        duel.published = true;
+
+        // The stored handle, never one the caller names: a proof then fits only the duel it was made for, and only
+        // the value the KMS decrypted (RULES.md §3, invariant 6).
+        bytes32[] memory handles = new bytes32[](1);
+        handles[0] = FHE.toBytes32(duel.creatorWins);
+        FHE.checkSignatures(handles, abi.encode(creatorWon), proof);
+
+        (uint256 winner, uint256 loser) =
+            creatorWon ? (duel.creatorCrystal, duel.challengerCrystal) : (duel.challengerCrystal, duel.creatorCrystal);
+        _records[winner].wins++;
+        _records[loser].losses++;
+        emit DuelPublished(duelId, winner, loser);
+    }
+
     // -- Views -------------------------------------------------------------------------------------------------
 
     /// A live crystal's public fields and its handles. Reverts for a crystal that does not exist.
@@ -219,14 +429,17 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
             level: crystal.level,
             mana: crystal.mana,
             lastAccrual: crystal.lastAccrual,
-            pendingMana: _pendingMana(crystal)
+            pendingMana: _pendingMana(crystal),
+            openLobby: crystal.openLobby,
+            wins: _records[tokenId].wins,
+            losses: _records[tokenId].losses
         });
     }
 
     /**
      * @notice The crystals `owner` holds among the ids from `cursor` to `cursor + count - 1`, and the id the next
-     *         page starts from, 0 when no id is left. A cursor of 0 starts from the first crystal. A page scans
-     *         `count` ids however many it finds, so its cost does not grow with the number of crystals.
+     *         page starts from, 0 when no id is left. A cursor of 0 starts from the first id. A page scans `count`
+     *         ids however many it finds, so its cost does not grow with the number of crystals.
      */
     function crystalsOf(address owner, uint256 cursor, uint256 count)
         external
@@ -235,23 +448,64 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
     {
         // Shattered crystals belong to the zero address, which owns nothing, as for `balanceOf`.
         if (owner == address(0)) revert ERC721InvalidOwner(address(0));
-        uint256 last = lastTokenId;
-        if (cursor == 0) cursor = 1;
-        if (cursor > last) return (new uint256[](0), 0);
-        // The last id this page scans. With `count` at 0 it falls just before `cursor`, so the page is empty and the
-        // next one starts where this one did.
-        uint256 end = count > last - cursor ? last : cursor + count - 1;
-
+        uint256 end;
+        (cursor, end, next) = _page(cursor, count, lastTokenId);
         tokenIds = new uint256[](end + 1 - cursor);
         uint256 found;
         for (uint256 id = cursor; id <= end; ++id) {
             if (_ownerOf(id) == owner) tokenIds[found++] = id;
         }
-        // Trim the array to what was found.
-        assembly ("memory-safe") {
-            mstore(tokenIds, found)
+        _trim(tokenIds, found);
+    }
+
+    /// A crystal's lifetime wins and losses, public and permanent (RULES.md §4). It answers for a shattered crystal
+    /// too, and gives 0 and 0 for an id never forged.
+    function recordOf(uint256 tokenId) external view returns (uint32 wins, uint32 losses) {
+        Record storage record = _records[tokenId];
+        return (record.wins, record.losses);
+    }
+
+    /// A lobby, all zero for an id never used.
+    function lobbyOf(uint256 lobbyId) external view returns (Lobby memory) {
+        return _lobbies[lobbyId];
+    }
+
+    /// A duel, all zero for an id never used.
+    function duelOf(uint256 duelId) external view returns (Duel memory) {
+        return _duels[duelId];
+    }
+
+    /// The open lobbies among the ids from `cursor` to `cursor + count - 1`, paged like `crystalsOf`.
+    function openLobbies(uint256 cursor, uint256 count)
+        external
+        view
+        returns (uint256[] memory lobbyIds, uint256 next)
+    {
+        uint256 end;
+        (cursor, end, next) = _page(cursor, count, lastLobbyId);
+        lobbyIds = new uint256[](end + 1 - cursor);
+        uint256 found;
+        for (uint256 id = cursor; id <= end; ++id) {
+            if (_lobbies[id].status == LobbyStatus.Open) lobbyIds[found++] = id;
         }
-        next = end < last ? end + 1 : 0;
+        _trim(lobbyIds, found);
+    }
+
+    /// The duels fought and not yet published among the ids from `cursor` to `cursor + count - 1`, paged like
+    /// `crystalsOf`. Anyone can publish them.
+    function pendingDuels(uint256 cursor, uint256 count)
+        external
+        view
+        returns (uint256[] memory duelIds, uint256 next)
+    {
+        uint256 end;
+        (cursor, end, next) = _page(cursor, count, lastDuelId);
+        duelIds = new uint256[](end + 1 - cursor);
+        uint256 found;
+        for (uint256 id = cursor; id <= end; ++id) {
+            if (!_duels[id].published) duelIds[found++] = id;
+        }
+        _trim(duelIds, found);
     }
 
     /// Seasons follow one another from the deployment, the first numbered 1.
@@ -265,6 +519,79 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
     }
 
     // -- Internal ----------------------------------------------------------------------------------------------
+
+    /**
+     * @dev SEASON0.md §2.2, Join: the duel, on encrypted data. A is the creator's crystal, which put up the stake when
+     *      the lobby opened if `paidA`, and B the challenger's, which puts it up here if it covers it. Elements and
+     *      levels decide the winner, and the stake changes hands only if both covered it (RULES.md §7). Every line runs
+     *      on every join and `select` picks the results (SEASON0.md §2.3, rule 1), so a duel whose stakes moved and one
+     *      whose stakes stayed run the same operations and look the same from outside. Returns whether A won, granted
+     *      to this contract and publicly decryptable.
+     */
+    function _fight(Crystal storage a, address ownerA, Crystal storage b, address ownerB, uint64 stake, ebool paidA)
+        internal
+        returns (ebool aWins)
+    {
+        euint64 manaA = _accrue(a);
+        euint64 manaB = _accrue(b);
+        // The stake is public, so encrypting it reveals nothing (SEASON0.md §2.3, rule 3).
+        euint64 staked = FHE.asEuint64(stake);
+        euint64 zero = FHE.asEuint64(0);
+
+        // MANA never wins a duel: the outcome reads no payment, so it cannot reveal one.
+        aWins = _outcome(a, b);
+
+        // The stake changes hands only if both crystals covered it.
+        ebool both = FHE.and(paidA, FHE.ge(manaB, stake));
+        euint64 moved = FHE.select(both, staked, zero);
+        // A put up its stake at opening if it covered it. When both covered, the winner takes both stakes; otherwise A
+        // takes its own back. The constructor keeps 2 × stake within 64 bits, and no sum here can wrap: each is at most
+        // the MANA in existence, which only accrual creates.
+        euint64 toA =
+            FHE.select(both, FHE.select(aWins, FHE.asEuint64(2 * stake), zero), FHE.select(paidA, staked, zero));
+        a.mana = _seal(FHE.add(manaA, toA), ownerA);
+        // B puts up its stake and settles it in this same call, so its balance moves only by the stake that changes
+        // hands. `moved` is nonzero only if B covered it, so the subtraction cannot wrap.
+        b.mana = _seal(FHE.select(aWins, FHE.sub(manaB, moved), FHE.add(manaB, moved)), ownerB);
+
+        FHE.allowThis(aWins);
+        // The only value a duel reveals (SEASON0.md §2.3, rule 4).
+        FHE.makePubliclyDecryptable(aWins);
+    }
+
+    /// Whether A beats B, on elements and levels alone: the triangle, then the higher level in a mirror, then a coin.
+    function _outcome(Crystal storage a, Crystal storage b) internal returns (ebool) {
+        ebool same = FHE.eq(a.element, b.element);
+        // Fire > Earth > Water > Fire: with 0 = Fire, 1 = Earth and 2 = Water, each element beats the next one.
+        ebool aBeatsB = FHE.eq(b.element, FHE.rem(FHE.add(a.element, 1), 3));
+        // Drawn on every join, not only in a mirror of equal levels, so that nothing depends on the inputs.
+        ebool coin = FHE.randEbool();
+        ebool mirror = FHE.select(FHE.eq(a.level, b.level), coin, FHE.gt(a.level, b.level));
+        return FHE.select(same, mirror, aBeatsB);
+    }
+
+    /**
+     * @dev The ids a page scans, from `first` to `end`, out of ids 1 to `last`, and the cursor of the next page, 0 when
+     *      no id is left. A cursor of 0 starts from id 1. With `count` at 0, or past the last id, `end` falls just
+     *      before `first`, so the page is empty.
+     */
+    function _page(uint256 cursor, uint256 count, uint256 last)
+        internal
+        pure
+        returns (uint256 first, uint256 end, uint256 next)
+    {
+        first = cursor == 0 ? 1 : cursor;
+        if (first > last) return (first, first - 1, 0);
+        end = count > last - first ? last : first + count - 1;
+        next = end < last ? end + 1 : 0;
+    }
+
+    /// Shortens `ids` to its first `length` entries, the ones a page found.
+    function _trim(uint256[] memory ids, uint256 length) internal pure {
+        assembly ("memory-safe") {
+            mstore(ids, length)
+        }
+    }
 
     /**
      * @dev SEASON0.md §2.2, Accrual: plaintext, and first in every call that touches a crystal's MANA. Credits the
@@ -318,7 +645,12 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
      *      it is refused.
      */
     function _update(address to, uint256 tokenId, address auth) internal override returns (address) {
-        if (to != address(0) && _ownerOf(tokenId) != address(0)) revert TransfersNotOpen();
+        if (to != address(0) && _ownerOf(tokenId) != address(0)) {
+            // RULES.md §4: a crystal waiting in an open lobby cannot be transferred. Checked first, so that the lock
+            // already holds when transfers open.
+            if (_crystals[tokenId].openLobby != 0) revert CrystalWaiting();
+            revert TransfersNotOpen();
+        }
         return super._update(to, tokenId, auth);
     }
 }

@@ -309,6 +309,9 @@ contract CrystalsTest is GardenFixture {
         assertEq(garden.SEASON_LENGTH(), SEASON_LENGTH);
         assertEq(garden.LEVEL_COST(), LEVEL_COST);
         assertEq(garden.MAX_LEVEL(), MAX_LEVEL);
+        assertEq(garden.MIN_STAKE(), MIN_STAKE);
+        assertEq(garden.MAX_STAKE(), MAX_STAKE);
+        assertEq(garden.LOBBY_TIMEOUT(), LOBBY_TIMEOUT);
         assertEq(garden.GENESIS(), block.timestamp);
         assertEq(garden.currentSeason(), 1);
     }
@@ -363,6 +366,39 @@ contract CrystalsTest is GardenFixture {
         assertEq(new Garden(params).LEVEL_COST(), type(uint64).max / 225);
         params.levelCost++;
         _assertRefused(params);
+    }
+
+    /// The constructor refuses an Arena it cannot run: a zero minimum stake, which would make a stake symbolic
+    /// (RULES.md §7), a minimum above the maximum, which leaves no stake to choose, a maximum whose double, what a
+    /// duel's winner takes, does not fit in 64 bits, and a lobby timeout longer than a season, which could keep a
+    /// waiting crystal from being shattered for longer. A single allowed stake is fine, and so are a timeout of a whole
+    /// season and none at all.
+    function testTheConstructorRefusesAnUnusableArena() public {
+        Garden.Params memory params = _seasonZero();
+        params.minStake = 0;
+        _assertRefused(params);
+
+        params = _seasonZero();
+        params.minStake = params.maxStake + 1;
+        _assertRefused(params);
+
+        params.minStake = params.maxStake;
+        Garden single = new Garden(params);
+        assertEq(single.MIN_STAKE(), single.MAX_STAKE());
+
+        params = _seasonZero();
+        params.maxStake = type(uint64).max / 2;
+        assertEq(new Garden(params).MAX_STAKE(), type(uint64).max / 2);
+        params.maxStake++;
+        _assertRefused(params);
+
+        params = _seasonZero();
+        params.lobbyTimeout = params.seasonLength + 1;
+        _assertRefused(params);
+        params.lobbyTimeout = params.seasonLength;
+        assertEq(new Garden(params).LOBBY_TIMEOUT(), SEASON_LENGTH);
+        params.lobbyTimeout = 0;
+        assertEq(new Garden(params).LOBBY_TIMEOUT(), 0);
     }
 
     // -- Helpers --------------------------------------------------------------------------------------------

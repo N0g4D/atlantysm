@@ -14,9 +14,16 @@ contract HcuTest is GardenFixture {
     uint256 internal constant HCU_PER_TX_BUDGET = 20_000_000 / 2;
     uint256 internal constant HCU_DEPTH_BUDGET = 5_000_000 / 2;
 
+    uint64 internal constant STAKE = 40;
+
     uint256 internal crystal;
     externalEbool internal rise;
     bytes internal riseProof;
+    /// A lobby for Bob's crystal to join, one for its creator to cancel, and a duel to publish.
+    uint256 internal challenger;
+    uint256 internal lobbyToJoin;
+    uint256 internal lobbyToCancel;
+    uint256 internal duelToPublish;
 
     /**
      * @dev Everything a measured call reads is made here. A forge test is one transaction, so a handle made in the
@@ -26,8 +33,17 @@ contract HcuTest is GardenFixture {
     function setUp() public override {
         super.setUp();
         crystal = _forge(alice);
-        // A day later, so that shattering credits real MANA, and a rise is paid for.
+        challenger = _forge(bob);
+        uint256 creator = _forge(alice);
+        uint256 canceller = _forge(alice);
+        uint256[2] memory duellists = [_forge(alice), _forge(bob)];
+        // A day later, so that every crystal covers its stake and a rise is paid for.
         _wait(1 days);
+        lobbyToJoin = _openLobby(creator, STAKE);
+        lobbyToCancel = _openLobby(canceller, STAKE);
+        duelToPublish = _duel(duellists[0], duellists[1], STAKE);
+        // Another day, so that the lobby may be cancelled, and every measured call credits real MANA.
+        _wait(LOBBY_TIMEOUT);
         (rise, riseProof) = encryptBool(true, address(garden), alice);
     }
 
@@ -52,6 +68,42 @@ contract HcuTest is GardenFixture {
         vm.prank(alice);
         garden.attune(crystal, rise, riseProof);
         _assertWithinBudget("attune", lastHCU());
+    }
+
+    function testOpeningALobbyStaysUnderHalfOfEachCap() public {
+        resetHCU();
+        vm.prank(alice);
+        garden.openLobby(crystal, STAKE);
+        _assertWithinBudget("openLobby", lastHCU());
+    }
+
+    /// Both crystals cover the stake here, so it changes hands. A duel whose stakes stay runs the same operations at the
+    /// same cost (Arena.t.sol shows it).
+    function testJoiningStaysUnderHalfOfEachCap() public {
+        resetHCU();
+        vm.prank(bob);
+        garden.joinLobby(lobbyToJoin, challenger);
+        _assertWithinBudget("joinLobby", lastHCU());
+    }
+
+    function testCancellingStaysUnderHalfOfEachCap() public {
+        resetHCU();
+        vm.prank(alice);
+        garden.cancelLobby(lobbyToCancel);
+        _assertWithinBudget("cancelLobby", lastHCU());
+    }
+
+    /// Publishing checks the KMS signatures, which costs gas, not HCU: no encrypted operation runs.
+    function testPublishingRunsNoEncryptedOperation() public {
+        (bool creatorWon, bytes memory proof) = decryptPublicWithSignatures(garden.duelOf(duelToPublish).creatorWins);
+        resetHCU();
+        vm.prank(stranger);
+        garden.publish(duelToPublish, creatorWon, proof);
+        FhevmHCUMeter memory hcu = lastHCU();
+        emit log_named_uint("publish: HCU per transaction", hcu.transaction);
+        emit log_named_uint("publish: HCU depth", hcu.maxHandle);
+        assertEq(hcu.transaction, 0);
+        assertEq(hcu.maxHandle, 0);
     }
 
     /// Not an external function, but a transaction with FHE work: the constructor draws GARDEN_ZERO.

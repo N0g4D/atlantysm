@@ -39,7 +39,7 @@ request ticks its task here.
   flowing into the season's pot.
   *Done when* the tests cover `RULES.md` §6, including that a rise, a refused rise and a hold look the same from
   outside.
-- [ ] **T05 · Lobbies and duels.** `openLobby` with the stake bounds, `cancelLobby`, `joinLobby` and `publish`, built
+- [x] **T05 · Lobbies and duels.** `openLobby` with the stake bounds, `cancelLobby`, `joinLobby` and `publish`, built
   from the spike, with locks and lifetime records.
   *Done when* the tests cover `RULES.md` §7 and the adversarial cases in `SEASON0.md` §5.
 - [ ] **T06 · Seasons.** The season index from deployment, wins and losses per season, the top three with

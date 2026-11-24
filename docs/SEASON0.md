@@ -40,9 +40,10 @@ Per crystal (`tokenId`):
 | `mana` | `euint64`, whole MANA | The owner |
 | `lastAccrual` | `uint64` timestamp | Everyone |
 | `openLobby` | lobby id, 0 when none | Everyone |
-| `wins`, `losses` | `uint32`, lifetime | Everyone |
+| `wins`, `losses` | `uint32`, lifetime, kept after the crystal is shattered | Everyone |
 
-- **Per lobby:** the creator's crystal, `stake` (`uint64`), `openedAt`, `creatorPaid` (`ebool`) and a status.
+- **Per lobby:** the creator's crystal, `stake` (`uint64`), `openedAt`, `creatorPaid` (`ebool`) and a status: open,
+  cancelled or fought.
 - **Per duel:** both crystals, the stake, its season, `creatorWins` (`ebool`, publicly decryptable) and a
   `published` flag.
 - **Per season:** `pot` (`euint64`), wins and losses per crystal, the id of each crystal's latest counted win, the
@@ -80,6 +81,13 @@ Garden keeps to this in three places:
 Every later stored handle combines a crystal's own handles with public scalars, encrypted inputs, other crystals'
 handles or `GARDEN_ZERO`. So nobody but Garden and the crystal's owner can recompute it. The element is the exception,
 because past owners keep it under the rules.
+
+The Arena keeps to the same line:
+- **`creatorPaid`** is granted to Garden alone. The creator can recompute it in the opening block, from its own MANA and
+  the public stake, and learns only whether it paid, which it knew.
+- **A duel's outcome and both new balances** descend from the coin, which only Garden draws on every join. Nobody can
+  recompute them, not even an owner of both crystals. A publicly decryptable handle can be decrypted by anyone, but
+  only Garden may compute on it.
 
 **Accrual.** Plaintext, and run first in every call that touches a crystal's MANA. `SECONDS_PER_MANA` is
 `1 days / MANA_PER_DAY`; the constructor requires the division to be exact.
@@ -142,28 +150,39 @@ mana = sub(mana, select(paid, asEuint64(stake), asEuint64(0)))
 lobby.creatorPaid = paid
 ```
 
-**Cancel** — the creator, after `LOBBY_TIMEOUT`, if nobody joined: `mana = add(mana, select(creatorPaid, stake, 0))`,
-then unlock the crystal.
+**Cancel** — the creator, from `LOBBY_TIMEOUT` after opening, if nobody joined. Accrue, then
+`mana = add(mana, select(creatorPaid, stake, 0))`, and unlock the crystal. A lobby does not expire: until its creator
+cancels it, a challenger can still join.
 
 **Join** `(lobbyId, tokenId)` — the owner of a different crystal that is not waiting. The duel is fought here.
-`A` is the creator's crystal and `B` the challenger's; accrue both first.
+Close the lobby and unlock the creator's crystal first, before any encrypted operation. `A` is the creator's crystal
+and `B` the challenger's; accrue both first.
 
 ```
-paidB   = ge(manaB, stake)
-manaB   = sub(manaB, select(paidB, stake, 0))
 same    = eq(eA, eB)
 aBeatsB = eq(eB, rem(add(eA, 1), 3))              // Fire > Earth > Water > Fire
 coin    = randEbool()                             // drawn every time: nothing branches on the inputs
 mirror  = select(eq(lA, lB), coin, gt(lA, lB))
-normal  = select(same, mirror, aBeatsB)
-aWins   = select(xor(paidA, paidB), paidA, normal)  // exactly one side paid: the payer wins
-pot     = add(select(paidA, stake, 0), select(paidB, stake, 0))
-manaA   = add(manaA, select(aWins, pot, 0))
-manaB   = add(manaB, select(aWins, 0, pot))
+aWins   = select(same, mirror, aBeatsB)           // elements and levels alone: MANA never wins a duel
+both    = and(paidA, ge(manaB, stake))            // the stake moves only if both crystals covered it
+moved   = select(both, stake, 0)
+manaA   = add(manaA, select(both, select(aWins, 2 × stake, 0), select(paidA, stake, 0)))
+manaB   = select(aWins, sub(manaB, moved), add(manaB, moved))
 duel.creatorWins = makePubliclyDecryptable(aWins)
 ```
 
-Then unlock the creator's crystal.
+`RULES.md` §7 as amended in #12: the outcome reads no payment, and the stake changes hands only when both crystals
+covered it.
+- **A** put up its stake at opening if it covered it (`paidA`). When both covered, A gets both stakes if it won and
+  nothing if it lost. Otherwise it gets back what it put up: its stake, or nothing if it could not cover it.
+- **B** puts up its stake and settles it in the same call, so its balance moves only by `moved`. The `sub` cannot
+  wrap: `moved` is nonzero only if B covered the stake.
+- **Whether the stakes moved** is never stored or granted. Every line runs whatever the payments were, so the duel
+  itself shows nobody outside it. Each player sees it in its own balance (`RULES.md` §9). Public history can still
+  settle it when it settles whether each side could cover the stake. A crystal forged too recently to have earned
+  the stake cannot, and one that has never attuned has a balance others can often work out (`RULES.md` §5).
+
+The duel records the season in progress, which it counts for once published.
 
 **Publish** `(duelId, bool creatorWon, bytes proof)` — anyone, once per duel.
 
@@ -171,8 +190,9 @@ Then unlock the creator's crystal.
 checkSignatures([duel.creatorWins], abi.encode(creatorWon), proof)
 ```
 
-Check only the stored handle, never one the caller passes. Then set `published`, update both lifetime records,
-and, if the duel's season is still open, its wins and losses and the winner's place in the top three.
+Check only the stored handle, never one the caller passes. Set `published` before the check, which reverts the whole
+call if it fails. Then update both lifetime records, also for a crystal shattered since the duel, and, if the duel's
+season is still open, its wins and losses and the winner's place in the top three (T06).
 
 The ranking key is the season's wins, then the latest counted win's duel id, lower first: duel ids grow as duels
 are fought, so this is "reached the score first" in `RULES.md` §8, whatever order results are published in. A
@@ -207,8 +227,9 @@ accounts (not a mint or a burn), seal the crystal again for the new owner.
 - A test must show that the previous owner cannot decrypt the new handles, even with a contract of hers that
   recomputes the reseal in that block.
 
-Until T07 builds this, `_update` refuses every transfer between accounts. Without the reseal, the previous owner
-would keep reading the level and MANA, and the new owner could not read them.
+Until T07 builds this, `_update` refuses every transfer between accounts: a waiting crystal with `CrystalWaiting`
+(since T05, checked first so that the lock outlasts this refusal), any other with `TransfersNotOpen`. Without the
+reseal, the previous owner would keep reading the level and MANA, and the new owner could not read them.
 
 ### 2.3 Rules for every change
 
@@ -256,13 +277,41 @@ Refined so far:
     whose highest value, `levelCost × maxLevel²`, does not fit in 64 bits.
   - **`attune`** reverts with `MissingProof` when the proof is empty, and with `ChoiceReused` when the input was
     already used (§2.2).
+- **T05.**
+  - **Construction.** `Params` gains `minStake`, `maxStake` and `lobbyTimeout`, readable as `MIN_STAKE`, `MAX_STAKE`
+    and `LOBBY_TIMEOUT`. The constructor refuses:
+    - a zero minimum stake;
+    - a minimum above the maximum;
+    - a maximum above `type(uint64).max / 2`, since a duel's winner takes the public `2 × stake`, encrypted as a
+      `euint64`;
+    - a lobby timeout longer than a season, since a crystal waiting in a lobby nobody joins cannot be shattered before
+      the timeout. A deployment with a short season (T09) needs a timeout as short. A zero timeout is allowed: the
+      creator may cancel at once.
+  - **The Arena.** `openLobby` returns the new lobby id and `joinLobby` the new duel id. Both start at 1 and are
+    never reused. The creator can join its own lobby with another crystal (`RULES.md` §8 accepts it in Season 0).
+  - **Reverts.** `StakeOutOfBounds`; `CrystalWaiting` when a waiting crystal opens a lobby, joins one (its own
+    included), is shattered or is transferred; `LobbyNotOpen` when the lobby to join or cancel is not open, or was
+    never opened; `TooEarlyToCancel`; `NotOwner`; `UnknownDuel`; `AlreadyPublished`.
+  - **Records** sit in their own mapping, which `shatter` leaves alone, so a shattered crystal keeps its record and
+    a duel published after a shatter still counts.
+  - **Views.**
+    - `crystalOf` also returns `openLobby`, `wins` and `losses`.
+    - `recordOf(tokenId)` returns the wins and losses, for shattered crystals too.
+    - `lobbyOf(lobbyId)` returns the crystal, the stake, `openedAt`, the status (`None`, `Open`, `Cancelled`,
+      `Fought`) and the `creatorPaid` handle, granted to Garden alone (§2.2, Handles).
+    - `duelOf(duelId)` returns both crystals, the season, the stake, `published` and the `creatorWins` handle.
+    - `openLobbies(cursor, count)` and `pendingDuels(cursor, count)` page by id like `crystalsOf`.
+    - `lastLobbyId()` and `lastDuelId()`.
 
 ### 2.5 Events
 
 `Forged(tokenId, owner)`, `Shattered(tokenId)`, `Attuned(tokenId)`, `LobbyOpened(lobbyId, tokenId, stake)`,
 `LobbyCancelled(lobbyId)`, `DuelFought(duelId, lobbyId, creatorCrystal, challengerCrystal, season)`,
 `DuelPublished(duelId, winner, loser)`, `SeasonClosed(season, first, second, third)`. `Forged` indexes the token id
-and the owner, and `Shattered` and `Attuned` the token id, so the app can filter them.
+and the owner, and `Shattered` and `Attuned` the token id, so the app can filter them. `LobbyOpened` indexes the
+lobby and the token, `LobbyCancelled` the lobby, `DuelFought` the duel and both crystals, and `DuelPublished` the
+duel, the winner and the loser. `publish` also emits the library's `PublicDecryptionVerified` from Garden, with the
+outcome's handle and value, which are public.
 
 ### 2.6 HCU budget
 
@@ -276,12 +325,14 @@ grants survive; `setUp` runs as a transaction of its own, like an earlier transa
 | `shatter` | 295,000 | 295,000 |
 | `attune` | 1,420,064 | 909,032 |
 | `openLobby` | 466,064 | 466,000 |
-| `joinLobby` | 2,259,064 | 906,000 |
+| `cancelLobby` | 350,064 | 295,000 |
+| `joinLobby` | 2,045,096 | 906,000 |
+| `publish` | 0 | 0 |
 | `closeSeason` | | |
 | transfer | | |
 
-`forge`, `shatter` and `attune` are measured on `Garden` (`packages/garden/test/Hcu.t.sol`). Deploying costs 58,000
-HCU, for `GARDEN_ZERO`.
+Every function is measured on `Garden` (`packages/garden/test/Hcu.t.sol`). Deploying costs 58,000 HCU, for
+`GARDEN_ZERO`.
 - **`forge`.** Most of it is the element: `randEuint16` costs 23,000, the scalar `rem` on `euint16` 580,000, and
   the cast to `euint8` 32. The zero for the level and MANA is the scalar `and` and `or` on `euint16` (61,000
   together) plus two casts of 32. It runs beside the `rem`, so it adds nothing to the depth.
@@ -296,15 +347,29 @@ HCU, for `GARDEN_ZERO`.
   Beside it run the accrual (133,000), `lt` (52,000), the other `and`, and the level's scalar `add` (84,000) and
   `select`. A rise, a refused rise and a hold run the same operations, at the same cost.
 
-`openLobby` and `joinLobby` were measured on the T02 spike (`packages/garden/test/spike/`); T05 measures them again
-on `Garden`. In `joinLobby` the triangle's scalar `rem` is the most expensive operation, 440,000 HCU, and it lies on
-the longest chain: `add`, `rem`, `eq`, three `select`, then the payout `add`.
+- **`openLobby`.** One chain: the accrual's scalar `add` (133,000), the scalar `ge` (116,000), `select` (55,000) and
+  the `sub` (162,000), plus two trivial encryptions of 32.
+- **`cancelLobby`.** The accrual (133,000), then the `add` of the refund (162,000). The refund's `select` (55,000)
+  runs beside the accrual.
+- **`joinLobby`.** The triangle's scalar `rem` is the most expensive operation, 440,000 HCU, and it lies on the
+  longest chain: `add`, `rem`, `eq`, three `select` (the outcome, the winner's share, both or the refund), then the
+  payout `add`.
+  - A duel whose stakes stay runs the same operations at the same cost (`Arena.t.sol`).
+  - Joining with the forfeit of the T02 spike cost 2,259,064. Without it:
+    - an `and` (25,000) replaces the `xor` (22,000);
+    - the outcome takes one `select` fewer (55,000);
+    - the two stakes are no longer added together (162,000);
+    - the winner's `2 × stake` adds a trivial encryption (32).
+
+    That is 213,968 less, at the same depth.
+- **`publish`.** No encrypted operation: checking the KMS signatures costs gas only.
 
 ## 3. Toolchain
 
 - **Solidity:** solc 0.8.24, EVM `cancun`, the optimizer on at 200 runs; Foundry 1.7.1, pinned in CI.
-  - Every FHE call inlines its checks. At T04, `Garden` is 11,442 bytes with the optimizer and would be 19,632
-    without it, of the 24,576 allowed.
+  - Every FHE call inlines its checks. At T05, `Garden` is 16,662 bytes with the optimizer, of the 24,576 allowed.
+    Without it, it would be 27,824 and could not be deployed, so the optimizer is no longer optional. At T04 the two
+    figures were 11,442 and 19,632.
   - Verification on Etherscan (T09) must use the same settings.
 - **Contract packages:** `@fhevm/solidity` ^0.13.4, `encrypted-types` ^0.0.4 (which `FHE.sol` imports, so every
   contract needs it to compile) and `@openzeppelin/contracts` ^5.
@@ -350,7 +415,8 @@ the longest chain: `add`, `rem`, `eq`, three `select`, then the payout `add`.
   - A stranger cannot decrypt any crystal's values, and nobody else can recompute one of its handles in the same
     block (§2.2, Handles).
   - After a transfer, the previous owner cannot decrypt the new level and MANA, even by recomputing the reseal.
-  - No event or revert differs between a rise, a refused rise and a hold, or between a forfeit and a defeat.
+  - No event or revert differs between a rise, a refused rise and a hold, or between a duel whose stakes moved and
+    one whose stakes stayed.
 - **Adversarial.** A forged outcome, a replayed proof and a second publish are rejected. A season cannot be
   closed early or twice. A crystal waiting in a lobby cannot be transferred, shattered or entered twice. A stake
   below or above its bounds is rejected.
