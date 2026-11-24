@@ -312,6 +312,10 @@ contract CrystalsTest is GardenFixture {
         assertEq(garden.MIN_STAKE(), MIN_STAKE);
         assertEq(garden.MAX_STAKE(), MAX_STAKE);
         assertEq(garden.LOBBY_TIMEOUT(), LOBBY_TIMEOUT);
+        assertEq(garden.SEASON_CLOSE_DELAY(), SEASON_CLOSE_DELAY);
+        assertEq(garden.FIRST_SHARE(), FIRST_SHARE);
+        assertEq(garden.SECOND_SHARE(), SECOND_SHARE);
+        assertEq(garden.THIRD_SHARE(), THIRD_SHARE);
         assertEq(garden.GENESIS(), block.timestamp);
         assertEq(garden.currentSeason(), 1);
     }
@@ -399,6 +403,37 @@ contract CrystalsTest is GardenFixture {
         assertEq(new Garden(params).LOBBY_TIMEOUT(), SEASON_LENGTH);
         params.lobbyTimeout = 0;
         assertEq(new Garden(params).LOBBY_TIMEOUT(), 0);
+    }
+
+    /**
+     * The constructor refuses seasons it cannot close as RULES.md §8 says: shares that do not add up to the whole
+     * centre, short of it or past it, where a closed season would keep back MANA forever or pay out more than it holds;
+     * a place that takes more than the one above it; and a close delay longer than a season, which would hold a prize
+     * back past the end of the next season. The shares 200, 100 and 56 add up to 100 in eight bits, so the sum must be
+     * taken wider. A delay of a whole season and none at all are fine, and so is a split that gives everything to the
+     * first place.
+     */
+    function testTheConstructorRefusesUnusableSeasons() public {
+        uint8[3][5] memory refused = [[50, 30, 19], [50, 30, 21], [30, 50, 20], [50, 20, 30], [200, 100, 56]];
+        for (uint256 i; i < refused.length; i++) {
+            Garden.Params memory params = _seasonZero();
+            params.prizeShares = refused[i];
+            _assertRefused(params);
+        }
+
+        Garden.Params memory accepted = _seasonZero();
+        accepted.prizeShares = [100, 0, 0];
+        assertEq(new Garden(accepted).FIRST_SHARE(), 100);
+        accepted.prizeShares = [34, 33, 33];
+        assertEq(new Garden(accepted).THIRD_SHARE(), 33);
+
+        accepted = _seasonZero();
+        accepted.seasonCloseDelay = accepted.seasonLength + 1;
+        _assertRefused(accepted);
+        accepted.seasonCloseDelay = accepted.seasonLength;
+        assertEq(new Garden(accepted).SEASON_CLOSE_DELAY(), SEASON_LENGTH);
+        accepted.seasonCloseDelay = 0;
+        assertEq(new Garden(accepted).SEASON_CLOSE_DELAY(), 0);
     }
 
     // -- Helpers --------------------------------------------------------------------------------------------

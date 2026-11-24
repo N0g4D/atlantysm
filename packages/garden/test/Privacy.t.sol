@@ -503,6 +503,127 @@ contract PrivacyTest is GardenFixture {
         snoop.negate(outcome);
     }
 
+    // -- Seasons --------------------------------------------------------------------------------------------------
+
+    /**
+     * RULES.md §8 and §9: closing a season credits each winner's share to its balance, which only its owner can read,
+     * and keeps the centre unreadable. Read from the ACL's events, closing grants each winner's credited balance to the
+     * contract, as accrual keeps it, each new balance to the contract and its own owner, and the new pot of the season in
+     * progress to the contract alone. Nothing becomes publicly decryptable. Each winner reads its own balance; the other
+     * winners' owners and a stranger read none, and nobody reads the centre, neither the closed one nor the new one.
+     */
+    function testClosingASeasonGrantsEachShareToItsWinnerOnly() public {
+        // Forging, fighting and closing in one forge test, which is one transaction, would hit the HCU caps that
+        // Hcu.t.sol measures each call against.
+        disableHCULimits();
+        (address carol, uint256 carolKey) = makeAddrAndKey("carol");
+        vm.deal(carol, 1 ether);
+        address[3] memory owners = [alice, bob, carol];
+        uint256[3] memory keys = [aliceKey, bobKey, carolKey];
+        uint256[3] memory top = _rankThree(owners);
+        _fillThePot();
+
+        _waitUntilClosable(1);
+        uint64[3] memory credited;
+        for (uint256 place; place < 3; place++) {
+            credited[place] = _balanceOf(top[place], keys[place]);
+        }
+        euint64 closedPot = garden.potOf(1);
+        vm.recordLogs();
+        _closeSeason(1);
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        _assertNothingPublic(logs);
+
+        Grant[] memory grants = _grantsIn(logs);
+        assertEq(grants.length, 10, "number of grants");
+        euint64[3] memory mana;
+        for (uint256 place; place < 3; place++) {
+            mana[place] = garden.crystalOf(top[place]).mana;
+            _assertCredit(grants[3 * place], credited[place]);
+            _assertGrant(grants[3 * place + 1], address(garden), euint64.unwrap(mana[place]));
+            _assertGrant(grants[3 * place + 2], owners[place], euint64.unwrap(mana[place]));
+        }
+        euint64 newPot = garden.potOf(2);
+        _assertGrant(grants[9], address(garden), euint64.unwrap(newPot));
+
+        for (uint256 place; place < 3; place++) {
+            assertGt(decrypt(mana[place], address(garden), keys[place]), credited[place], "the owner reads its share");
+            for (uint256 other; other < 3; other++) {
+                if (other != place) _assertCannotDecrypt(mana[place], owners[other], keys[other]);
+            }
+            _assertCannotDecrypt(mana[place], stranger, strangerKey);
+            _assertNotPublic(mana[place]);
+            _assertCannotDecrypt(closedPot, owners[place], keys[place]);
+            _assertCannotDecrypt(newPot, owners[place], keys[place]);
+        }
+        _assertCannotDecrypt(closedPot, stranger, strangerKey);
+        _assertCannotDecrypt(newPot, stranger, strangerKey);
+        _assertNotPublic(closedPot);
+        _assertNotPublic(newPot);
+    }
+
+    /**
+     * SEASON0.md §2.2, Handles: every share descends from the closed season's pot, which only the contract holds, so a
+     * winner can compute on neither that pot nor the new pot of the season in progress, and so cannot recompute its
+     * share or its new balance: it can only decrypt the balance. Here a contract owns the crystal that takes the first
+     * place. In a forge test it still holds every transient grant it was given, and it holds its new balance, which
+     * shows that the probe can see a grant.
+     */
+    function testAWinnerCannotComputeOnTheCentre() public {
+        disableHCULimits();
+        DuelProber winner = new DuelProber();
+        uint256 water;
+        for (uint256 i; i < 40 && water == 0; i++) {
+            uint256 tokenId = winner.forge{value: CHARGE}(garden);
+            if (plaintextOf(garden.crystalOf(tokenId).element) == WATER) water = tokenId;
+        }
+        uint256 fire = _forgeElement(alice, FIRE);
+        uint256 lobbyId = winner.openLobby(garden, water, MIN_STAKE);
+        _join(lobbyId, fire);
+        _publish(garden.lastDuelId());
+        _fillThePot();
+
+        _waitUntilClosable(1);
+        euint64 closedPot = garden.potOf(1);
+        _closeSeason(1);
+
+        IAcl acl = IAcl(getCoprocessorConfig(address(garden)).ACLAddress);
+        euint64 newPot = garden.potOf(2);
+        assertEq(_top(1)[0], water, "the contract's crystal takes the first place");
+        assertTrue(acl.isAllowed(euint64.unwrap(garden.crystalOf(water).mana), address(winner)), "its own balance");
+        assertFalse(acl.isAllowed(euint64.unwrap(closedPot), address(winner)), "the closed centre");
+        assertFalse(acl.isAllowed(euint64.unwrap(newPot), address(winner)), "the new centre");
+        vm.expectRevert(
+            abi.encodeWithSignature("ACLNotAllowed(bytes32,address)", euint64.unwrap(closedPot), address(winner))
+        );
+        winner.addOne(closedPot);
+        vm.expectRevert(
+            abi.encodeWithSignature("ACLNotAllowed(bytes32,address)", euint64.unwrap(newPot), address(winner))
+        );
+        winner.addOne(newPot);
+    }
+
+    /// Three Water crystals of the given owners, ranked first, second and third in season 1: they beat a Fire crystal
+    /// of Alice's three times, twice and once.
+    function _rankThree(address[3] memory owners) internal returns (uint256[3] memory top) {
+        uint256 fire = _forgeElement(alice, FIRE);
+        for (uint256 place; place < 3; place++) {
+            top[place] = _forgeElement(owners[place], WATER);
+            for (uint256 i; i < 3 - place; i++) {
+                _publish(_duel(top[place], fire, MIN_STAKE));
+            }
+        }
+        _assertTop(1, top[0], top[1], top[2], "three ranked");
+    }
+
+    /// A crystal of Alice's that has accrued a day of MANA is shattered into season 1's centre.
+    function _fillThePot() internal {
+        uint256 donor = _forge(alice);
+        _wait(1 days);
+        _shatter(alice, donor);
+        assertEq(plaintextOf(garden.potOf(1)), MANA_PER_DAY, "the centre");
+    }
+
     /// The handle of the one random value drawn in these logs, read from the executor's event.
     function _drawIn(Vm.Log[] memory logs) internal pure returns (bytes32 handle) {
         uint256 draws;

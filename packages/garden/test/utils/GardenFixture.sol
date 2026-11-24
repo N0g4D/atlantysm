@@ -23,6 +23,11 @@ abstract contract GardenFixture is TestFhevm {
     uint64 internal constant MIN_STAKE = 10;
     uint64 internal constant MAX_STAKE = 100;
     uint256 internal constant LOBBY_TIMEOUT = 24 hours;
+    /// A season can be closed an hour after it ends, and its centre goes 50%, 30% and 20% to its top three.
+    uint256 internal constant SEASON_CLOSE_DELAY = 1 hours;
+    uint8 internal constant FIRST_SHARE = 50;
+    uint8 internal constant SECOND_SHARE = 30;
+    uint8 internal constant THIRD_SHARE = 20;
 
     uint8 internal constant FIRE = 0;
     uint8 internal constant EARTH = 1;
@@ -77,7 +82,9 @@ abstract contract GardenFixture is TestFhevm {
             maxLevel: MAX_LEVEL,
             minStake: MIN_STAKE,
             maxStake: MAX_STAKE,
-            lobbyTimeout: LOBBY_TIMEOUT
+            lobbyTimeout: LOBBY_TIMEOUT,
+            seasonCloseDelay: SEASON_CLOSE_DELAY,
+            prizeShares: [FIRST_SHARE, SECOND_SHARE, THIRD_SHARE]
         });
     }
 
@@ -180,8 +187,8 @@ abstract contract GardenFixture is TestFhevm {
         return (x == WATER && y == FIRE) || (x == FIRE && y == EARTH) || (x == EARTH && y == WATER);
     }
 
-    /// What a season's pot holds, read with `plaintextOf` since nobody can decrypt it. 0 while its handle is still
-    /// empty, before any crystal attunes or is shattered in that season.
+    /// What a season's pot holds, read with `plaintextOf` since nobody can decrypt it. 0 while its handle is empty:
+    /// before anything is added to it, and once the season is closed.
     function _pot(uint256 season) internal returns (uint64) {
         euint64 pot = garden.potOf(season);
         return euint64.unwrap(pot) == 0 ? 0 : plaintextOf(pot);
@@ -191,6 +198,47 @@ abstract contract GardenFixture is TestFhevm {
     function _wait(uint256 secs) internal {
         vm.warp(block.timestamp + secs);
         vm.roll(block.number + 1);
+    }
+
+    // -- Seasons --------------------------------------------------------------------------------------------
+
+    /// When `season` ends: the deployment, then one season length per season.
+    function _seasonEnd(uint256 season) internal view returns (uint256) {
+        return garden.GENESIS() + season * SEASON_LENGTH;
+    }
+
+    /// Moves to the first moment `season` can be closed, a block later.
+    function _waitUntilClosable(uint256 season) internal {
+        vm.warp(_seasonEnd(season) + SEASON_CLOSE_DELAY);
+        vm.roll(block.number + 1);
+    }
+
+    /// A stranger closes the season: anyone can.
+    function _closeSeason(uint256 season) internal {
+        vm.prank(stranger);
+        garden.closeSeason(season);
+    }
+
+    /// The season's top three, best first, 0 for an empty place.
+    function _top(uint256 season) internal view returns (uint256[3] memory crystals) {
+        (crystals,,) = garden.rankingOf(season);
+    }
+
+    function _assertTop(uint256 season, uint256 first, uint256 second, uint256 third, string memory label)
+        internal
+        view
+    {
+        uint256[3] memory top = _top(season);
+        assertEq(top[0], first, string.concat(label, ": first"));
+        assertEq(top[1], second, string.concat(label, ": second"));
+        assertEq(top[2], third, string.concat(label, ": third"));
+    }
+
+    /// What a closed season's pot pays the crystal in `place`, 0 for the first: the share's percent of the pot, rounded
+    /// down (RULES.md §8).
+    function _shareOf(uint256 pot, uint256 place) internal pure returns (uint64) {
+        uint256 percent = place == 0 ? FIRST_SHARE : place == 1 ? SECOND_SHARE : THIRD_SHARE;
+        return uint64(pot * percent / 100);
     }
 
     // -- Decryption checks ----------------------------------------------------------------------------------

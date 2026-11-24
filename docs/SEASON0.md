@@ -8,7 +8,7 @@
 | Path | What it is |
 |---|---|
 | `packages/garden` | Foundry project. `Garden.sol` implements every rule of `RULES.md` and holds every encrypted value. |
-| `packages/garden/script` | The Sepolia deployment script and the keeper, which publishes duels and closes seasons. |
+| `packages/garden/script` | The Sepolia deployment script and the keeper, which publishes duels and closes seasons. A result counts for its season only if published within `SEASON_CLOSE_DELAY` of the season's end, so the keeper publishes a season's duels before then. |
 | `packages/app` | The React client: Vite, wagmi, viem and Zama's React SDK. UI copy is Italian. |
 | `packages/contracts`, `packages/client` | The MUD MVP. Frozen: no new work, and not deployed for Season 0. Its notes (`docs/architecture.md`, `docs/tasks/`, `deploy_instructions.md`) describe the MVP only. |
 
@@ -47,7 +47,8 @@ Per crystal (`tokenId`):
 - **Per duel:** both crystals, the stake, its season, `creatorWins` (`ebool`, publicly decryptable) and a
   `published` flag.
 - **Per season:** `pot` (`euint64`), wins and losses per crystal, the id of each crystal's latest counted win, the
-  top three and a `closed` flag. Seasons are numbered from 1, and season 1 starts at the deployment.
+  top three and a `closed` flag. Seasons are numbered from 1, and season 1 starts at the deployment. Closing a season
+  pays out its pot and empties it.
 - **Choices used:** every input handle `attune` has accepted (§2.2, Attune).
 
 The contract's ETH balance always equals `CHARGE × live crystals`. `forge` is the only call that takes ETH: `Garden`
@@ -182,7 +183,8 @@ covered it.
   settle it when it settles whether each side could cover the stake. A crystal forged too recently to have earned
   the stake cannot, and one that has never attuned has a balance others can often work out (`RULES.md` §5).
 
-The duel records the season in progress, which it counts for once published.
+The duel records the season in progress, which it counts for if published within `SEASON_CLOSE_DELAY` of that
+season's end (*Publish*, below).
 
 **Publish** `(duelId, bool creatorWon, bytes proof)` — anyone, once per duel.
 
@@ -191,29 +193,56 @@ checkSignatures([duel.creatorWins], abi.encode(creatorWon), proof)
 ```
 
 Check only the stored handle, never one the caller passes. Set `published` before the check, which reverts the whole
-call if it fails. Then update both lifetime records, also for a crystal shattered since the duel, and, if the duel's
-season is still open, its wins and losses and the winner's place in the top three (T06).
+call if it fails. Then update both lifetime records, also for a crystal shattered since the duel. If the result comes
+within `SEASON_CLOSE_DELAY` of the end of the duel's season (`block.timestamp < seasonEnd + SEASON_CLOSE_DELAY`, the
+season in progress included), also count its win and loss for that season and place the winner in the top three.
+Later, it counts only in the records, whether or not anyone has closed the season (`RULES.md` §8 as amended in #15).
+A season can be closed only from that same moment, so a result that counts always comes before any close: the
+ranking is final once the season can be closed, whoever closes it and whenever. `publish` does not read `closed`.
 
-The ranking key is the season's wins, then the latest counted win's duel id, lower first: duel ids grow as duels
-are fought, so this is "reached the score first" in `RULES.md` §8, whatever order results are published in. A
-crystal's key changes only when it wins, and then it improves, so inserting the winner keeps the top three exact
-without scanning every crystal. A tie-break on losses would break that: a ranked crystal that lost could fall below
-one nobody tracks.
+The ranking key is the season's wins, then the latest counted win's duel id, lower first. The latest counted win is
+the highest duel id among the crystal's counted wins, not the one published last. Duel ids grow as duels are fought,
+so this is "reached the score first" in `RULES.md` §8, whatever order results are published in.
+- **No ties.** Each duel has one winner, so no two crystals share their latest counted win.
+- **Who is ranked.** A crystal with no win counted is not ranked, so a season can end with empty places. A shattered
+  crystal keeps its place.
+- **Insertion is exact.** A crystal's key changes only when it wins, and then it improves. So the winner moves up past
+  every crystal it is now ahead of, coming in through the first empty place or in place of the third, and the top
+  three stay exact without scanning every crystal.
+- **No tie-break on losses.** It would break insertion: a ranked crystal that lost could fall below one nobody tracks.
 
-**Close a season** `(season)` — anyone, once, from `SEASON_CLOSE_DELAY` after the season ends.
+**Close a season** `(season)` — anyone, once, from `SEASON_CLOSE_DELAY` after the season ends, when its ranking has
+become final (*Publish*, above). Mark the season closed and empty its pot before any encrypted operation. Nothing adds
+to a past season's pot, so the pot read then is all there is.
 
 ```
+rest = pot                                        // from GARDEN_ZERO if nobody paid into it
 for each of the top three that still exists:
     share = div(mul(pot, pct), 100)
-    mana  = add(mana, share)
-rest = sub(pot, sum of the shares)
+    mana  = add(accrue(mana), share)              // accrual first, as in every call that touches MANA
+    rest  = sub(rest, share)
 pot[currentSeason] = add(pot[currentSeason], rest)
 ```
 
-The shares of missing or shattered crystals stay in `rest`. It goes to the season in progress, which cannot be
-closed yet, rather than to `season + 1`, which may already be closed if this call comes late. The pot is never
-decrypted. Each winner can still work out the pot from its own share, because the split is fixed; `RULES.md` §8
-accepts this.
+- **The rest.** The shares of empty places and shattered crystals stay in `rest`, with what rounding leaves. It goes
+  to the season in progress, which cannot be closed yet, rather than to `season + 1`, which may already be closed if
+  this call comes late.
+- **What the timing still decides.** The ranking is final before any close, so whoever closes pays the same places the
+  same shares. Two things depend on when the close comes: which season in progress receives `rest`, and whether a
+  winner is still alive to take its share. A winner's owner who shatters it before the close leaves its share in
+  `rest`.
+- **No wrap.** `pot × pct` fits in 64 bits while the pot holds less than 2^64 / 100 MANA. A pot holds at most the
+  MANA ever accrued: at one MANA a second, the fastest rate the constructor allows, a million crystals would take
+  5,800 years to accrue that much. The shares are floors of fractions that add up to one, so together they never
+  exceed the pot, and `rest` never wraps.
+- **Never decrypted.** The pot is not revealed, and neither are the shares. Each winner can still work out the pot
+  from its own share, because the split is fixed; `RULES.md` §8 accepts this. Shares round down, so it knows the pot
+  to within a few MANA: the first place to within one, the third to within four.
+- **Who can recompute.** Every share descends from the closed season's pot, which only Garden holds. So nobody else
+  can recompute a winner's new balance or the new pot. Each winner's new balance is granted to Garden and its owner,
+  the new pot to Garden alone, and the shares and `rest` to nobody.
+- **Branches.** Only on public data: which places are filled, and whether their crystals still exist. A close with
+  fewer winners runs fewer operations, and one with a full pot looks the same from outside as one with an empty pot.
 
 **Shatter** `(tokenId)` — owner only, the crystal not waiting in a lobby. Accrue, add the crystal's MANA to the
 current season's pot (an empty pot starts from `GARDEN_ZERO`), burn the token, and send `CHARGE` to the owner last.
@@ -302,6 +331,29 @@ Refined so far:
     - `duelOf(duelId)` returns both crystals, the season, the stake, `published` and the `creatorWins` handle.
     - `openLobbies(cursor, count)` and `pendingDuels(cursor, count)` page by id like `crystalsOf`.
     - `lastLobbyId()` and `lastDuelId()`.
+- **T06.**
+  - **Construction.** `Params` gains `seasonCloseDelay` and `prizeShares` (percent, first place first), readable as
+    `SEASON_CLOSE_DELAY`, `FIRST_SHARE`, `SECOND_SHARE` and `THIRD_SHARE`. The constructor refuses:
+    - shares that do not add up to 100. The centre goes to the top three in full, and past 100 a close would pay out
+      more than the pot holds;
+    - a place that takes more than the one above it;
+    - a close delay longer than a season, which would hold a prize back past the end of the next season.
+
+    A zero delay is accepted, but then a result counts only if it comes before the season ends, and a season's last
+    duels cannot be decrypted and published by then: they count only in the records. A deployment needs a delay that
+    covers both (T09).
+  - **Seasons.** `closeSeason(season)` emits `SeasonClosed`. It reverts with:
+    - `UnknownSeason` for season 0;
+    - `TooEarlyToClose` for the season in progress, a later one, or one that ended less than `SEASON_CLOSE_DELAY` ago.
+      The check subtracts, so no season number can overflow;
+    - `AlreadyClosed`.
+  - **Views.**
+    - `rankingOf(season)` returns the top three, best first, their wins in the season, and whether the season is
+      closed. An empty place is 0. A crystal shattered since keeps its place; whether its share was paid shows only
+      in whether its `Shattered` event came before `SeasonClosed`.
+    - `scoreOf(season, tokenId)` returns a crystal's wins and losses counted in the season, and `lastWin`, the id of
+      the latest duel among those wins, which breaks ties.
+    - `potOf(season)` returns 0 again once the season is closed.
 
 ### 2.5 Events
 
@@ -309,15 +361,20 @@ Refined so far:
 `LobbyCancelled(lobbyId)`, `DuelFought(duelId, lobbyId, creatorCrystal, challengerCrystal, season)`,
 `DuelPublished(duelId, winner, loser)`, `SeasonClosed(season, first, second, third)`. `Forged` indexes the token id
 and the owner, and `Shattered` and `Attuned` the token id, so the app can filter them. `LobbyOpened` indexes the
-lobby and the token, `LobbyCancelled` the lobby, `DuelFought` the duel and both crystals, and `DuelPublished` the
-duel, the winner and the loser. `publish` also emits the library's `PublicDecryptionVerified` from Garden, with the
+lobby and the token, `LobbyCancelled` the lobby, `DuelFought` the duel and both crystals, `DuelPublished` the
+duel, the winner and the loser, and `SeasonClosed` the season. `SeasonClosed` gives 0 for an empty place, and lists a
+crystal shattered before the close in its place, although its share stayed in the centre. It carries neither the pot
+nor the shares. `publish` also emits the library's `PublicDecryptionVerified` from Garden, with the
 outcome's handle and value, which are public.
 
 ### 2.6 HCU budget
 
 Filled in by T02 and kept current. Each number is `lastHCU()` for a single call whose inputs were made in `setUp`.
 A forge test is one transaction, so within it a handle carries the depth of the calls that made it and transient
-grants survive; `setUp` runs as a transaction of its own, like an earlier transaction on chain.
+grants survive; `setUp` runs as a transaction of its own, like an earlier transaction on chain. Since T06, `setUp`
+builds more than one transaction may hold, so it lifts the caps. The meter still runs, and every test compares its one
+call with half of each cap, which is stricter than the cap itself. Each test also pins its row of the table, so a
+change that costs more or less fails until the table follows.
 
 | Function | HCU per transaction | Depth |
 |---|---|---|
@@ -328,7 +385,7 @@ grants survive; `setUp` runs as a transaction of its own, like an earlier transa
 | `cancelLobby` | 350,064 | 295,000 |
 | `joinLobby` | 2,045,096 | 906,000 |
 | `publish` | 0 | 0 |
-| `closeSeason` | | |
+| `closeSeason` | 4,773,000 | 1,728,000 |
 | transfer | | |
 
 Every function is measured on `Garden` (`packages/garden/test/Hcu.t.sol`). Deploying costs 58,000 HCU, for
@@ -362,14 +419,29 @@ Every function is measured on `Garden` (`packages/garden/test/Hcu.t.sol`). Deplo
     - the winner's `2 × stake` adds a trivial encryption (32).
 
     That is 213,968 less, at the same depth.
-- **`publish`.** No encrypted operation: checking the KMS signatures costs gas only.
+- **`publish`.** No encrypted operation: checking the KMS signatures costs gas only. Since T06 it also counts the
+  result for its season and places the winner in the top three, in plaintext. `Hcu.t.sol` measures both a result
+  that counts for its season and one that counts only in the records.
+- **`closeSeason`.** Measured with three living winners, the most a close can do. Fewer winners run fewer operations,
+  and what the pot holds changes nothing (`Seasons.t.sol`).
+  - Each share is a scalar `mul` (365,000) and then a scalar `div` (715,000) on `euint64`: 1,080,000, the longest
+    step of the call. It is added to the winner's balance (162,000) after the accrual (133,000), and taken from the
+    rest with a `sub` (162,000). Each winner costs 1,537,000, three cost 4,611,000, and the `add` of the rest into the
+    season in progress 162,000 more.
+  - The longest chain is a share, then the three `sub`s from the rest, then that `add`: 1,728,000.
+  - Each share computed in `euint128`, where it could never wrap, would cost 1,921,064 instead of 1,080,000, and the
+    depth would come to 2,569,064, over half of the cap.
+  - A transaction can hold at most four closes, and each one after the first deepens the chain by 162,000, through
+    the pot of the season in progress. The keeper (T17) closes one season per transaction.
+  - `FHE.sum` would add the shares for less than two `add`s, but it arrived only in a recent protocol release
+    (Zama's changelog). The close keeps to long-supported operations, so that it works on Sepolia.
 
 ## 3. Toolchain
 
 - **Solidity:** solc 0.8.24, EVM `cancun`, the optimizer on at 200 runs; Foundry 1.7.1, pinned in CI.
-  - Every FHE call inlines its checks. At T05, `Garden` is 16,662 bytes with the optimizer, of the 24,576 allowed.
-    Without it, it would be 27,824 and could not be deployed, so the optimizer is no longer optional. At T04 the two
-    figures were 11,442 and 19,632.
+  - Every FHE call inlines its checks. At T06, `Garden` is 19,262 bytes with the optimizer, of the 24,576 allowed, so
+    5,314 are left for T07. Without the optimizer it would be 31,805 and could not be deployed, so the optimizer is not
+    optional. At T05 the two figures were 16,662 and 27,824, and at T04 11,442 and 19,632.
   - Verification on Etherscan (T09) must use the same settings.
 - **Contract packages:** `@fhevm/solidity` ^0.13.4, `encrypted-types` ^0.0.4 (which `FHE.sol` imports, so every
   contract needs it to compile) and `@openzeppelin/contracts` ^5.
@@ -403,7 +475,9 @@ Every function is measured on `Garden` (`packages/garden/test/Hcu.t.sol`). Deplo
 - **Waiting is a state.** A mined receipt does not mean a result is ready. Every write shows a pending state until
   the new values decrypt, and errors are shown, not swallowed.
 - **Publishing.** For a pending duel, the app fetches the public decryption and its proof through the SDK and
-  calls `publish`. Any visitor can do it.
+  calls `publish`. Any visitor can do it. A result counts for its season only if published within
+  `SEASON_CLOSE_DELAY` of the season's end, so Classifica shows that deadline next to the countdown, and marks a past
+  season's pending result as counting only in the records once the deadline has passed.
 - **Reads** go through view functions. There is no indexer in Season 0.
 - **Headers.** Vercel serves the app with the COOP and COEP headers that let the FHE backend run multithreaded.
   Check that the wallet connectors still work with them before keeping them.
@@ -417,10 +491,13 @@ Every function is measured on `Garden` (`packages/garden/test/Hcu.t.sol`). Deplo
   - After a transfer, the previous owner cannot decrypt the new level and MANA, even by recomputing the reseal.
   - No event or revert differs between a rise, a refused rise and a hold, or between a duel whose stakes moved and
     one whose stakes stayed.
+  - Closing a season grants each winner's new balance to its owner only, and nobody can decrypt a pot. A close looks
+    the same from outside whatever the pot holds.
 - **Adversarial.** A forged outcome, a replayed proof and a second publish are rejected. A season cannot be
   closed early or twice. A crystal waiting in a lobby cannot be transferred, shattered or entered twice. A stake
   below or above its bounds is rejected.
-- **Ranking.** The same duels give the same top three whatever order their results are published in.
+- **Ranking.** The same duels give the same top three whatever order their results are published in, and after each
+  result the top three are exact for the results counted so far.
 - **Conservation**, fuzzed: the ETH balance equals `CHARGE ×` live crystals, and the MANA in crystals and pots
   equals the MANA accrued, read with `plaintextOf`.
 - **Mocks are not production.** The test stack computes in cleartext; T09 plays a full round on Sepolia.
