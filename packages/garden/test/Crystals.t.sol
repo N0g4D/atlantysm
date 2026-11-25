@@ -393,6 +393,23 @@ contract CrystalsTest is GardenFixture {
         assertEq(address(garden).balance, CHARGE, "the other crystal's charge stays");
     }
 
+    /// RULES.md §3, invariant 1: Garden takes no crystal. It could never shatter one, so the charge would never come
+    /// back. Every way to transfer refuses it with the error `safeTransferFrom` gives any contract that takes no ERC-721.
+    function testGardenTakesNoCrystal() public {
+        uint256 tokenId = _forge(alice);
+        bytes memory refused = abi.encodeWithSelector(IERC721Errors.ERC721InvalidReceiver.selector, address(garden));
+
+        vm.startPrank(alice);
+        vm.expectRevert(refused);
+        garden.transferFrom(alice, address(garden), tokenId);
+        vm.expectRevert(refused);
+        garden.safeTransferFrom(alice, address(garden), tokenId);
+        vm.expectRevert(refused);
+        garden.safeTransferFrom(alice, address(garden), tokenId, "");
+        vm.stopPrank();
+        assertEq(garden.ownerOf(tokenId), alice);
+    }
+
     /// RULES.md §4: a contract that takes a crystal by `safeTransferFrom` is called once the crystal is sealed for it,
     /// so it may already use the level and MANA when it is called.
     function testAReceivingContractMayUseTheCrystalWhenCalled() public {

@@ -90,8 +90,8 @@ The Arena keeps to the same line:
   recompute them, not even an owner of both crystals. A publicly decryptable handle can be decrypted by anyone, but
   only Garden may compute on it.
 
-**Accrual.** Plaintext, and run first in every call that changes a crystal's balance or moves it. A transfer seals the
-balance again without changing it, so it leaves the accrual for the crystal's next action (Transfer, below).
+**Accrual.** Plaintext, and run first in every call that changes a crystal's balance or moves MANA out of it. A transfer
+seals the balance again without changing it, so it leaves the accrual for the crystal's next action (Transfer, below).
 `SECONDS_PER_MANA` is `1 days / MANA_PER_DAY`; the constructor requires the division to be exact.
 
 ```
@@ -220,7 +220,7 @@ to a past season's pot, so the pot read then is all there is.
 rest = pot                                        // from GARDEN_ZERO if nobody paid into it
 for each of the top three that still exists:
     share = div(mul(pot, pct), 100)
-    mana  = add(accrue(mana), share)              // accrual first, as in every call that touches MANA
+    mana  = add(accrue(mana), share)              // accrual first, as in every call that changes a balance
     rest  = sub(rest, share)
 pot[currentSeason] = add(pot[currentSeason], rest)
 ```
@@ -250,9 +250,11 @@ current season's pot (an empty pot starts from `GARDEN_ZERO`), burn the token, a
 
 **Transfer** — the ERC-721 `_update` hook, which every mint, burn and transfer passes through. Revert with
 `CrystalWaiting` if the crystal is waiting in a lobby. Only a transfer can meet one: `forge` mints a crystal before it
-can wait, and `shatter` refuses a waiting crystal and clears it before burning it. Then the ERC-721 checks the caller's
-approval and moves the token. Only after that, on a transfer between two accounts (not a mint or a burn), seal the
-crystal again for the new owner:
+can wait, and `shatter` refuses a waiting crystal and clears it before burning it. Revert with `ERC721InvalidReceiver`
+if the crystal would go to Garden itself, which could never shatter it, so its charge would never come back
+(`RULES.md` §3, invariant 1); `safeTransferFrom` refuses Garden with the same error anyway, since Garden takes no
+ERC-721. Then the ERC-721 checks the caller's approval and moves the token. Only after that, on a transfer between two
+accounts (not a mint or a burn), seal the crystal again for the new owner:
 
 ```
 level = or(level, asEuint8(GARDEN_ZERO))
@@ -261,9 +263,11 @@ mana  = or(mana, GARDEN_ZERO)
 
 - **New handles, same values.** Call `allowThis` and `allow(newOwner)` on both, and `allow(newOwner)` on `element`,
   which keeps its handle: every previous owner keeps knowing it (`RULES.md` §4).
-- **A zero only Garden holds.** A plaintext zero would not do, nor any zero anyone can encrypt. The previous owner
-  still holds the old handles, so she could recompute `or(level, 0)` in the transfer's block and grant herself the
-  result. She is not allowed on `GARDEN_ZERO`, nor on its cast, which is granted to nobody and lives for the transaction.
+- **A zero only Garden holds.** A plaintext zero would not do, nor any zero anyone can encrypt, nor one made from a
+  handle the previous owner holds, such as `and(level, 0)` or `and(element, 0)`. She still holds the old handles and the
+  element, so she could recompute any of these in the transfer's block, then the new handles, and grant them to herself.
+  She is not allowed on `GARDEN_ZERO`, which descends from a random draw, nor on its cast, which only Garden holds, and
+  only for the transaction.
 - **`or`, not `add`.** Both keep the value, and `or` costs a quarter as much (§2.6).
 - **No accrual.** The reseal leaves the balance as it is. So the MANA accrued since `lastAccrual` stays pending, in
   public, and goes with the crystal: the new owner is credited it at the crystal's next action.
@@ -271,8 +275,9 @@ mana  = or(mana, GARDEN_ZERO)
 - **The receiver.** `safeTransferFrom` calls the receiver after the hook, so a contract that takes a crystal can already
   use its level and MANA when it is called.
 - **The test.** `Privacy.t.sol` shows that the previous owner cannot decrypt the new handles. A contract of hers
-  recomputes the reseal in the transfer's block with the zeros anyone can make, and gets other handles; with Garden's own
-  operands it cannot compute at all.
+  recomputes the reseal in the transfer's block with the zeros anyone can make, and gets other handles. Walked back
+  through the executor's events, each new handle descends from a handle she can neither use nor make again, so no other
+  way would work either. Another test shows that `GARDEN_ZERO` is granted to Garden alone, not to its deployer.
 
 ### 2.3 Rules for every change
 
@@ -371,7 +376,8 @@ Refined so far:
 - **T07.**
   - **Transfers.** `transferFrom` and both `safeTransferFrom` work as for any ERC-721, by the owner, an approved account
     or an operator, and seal the crystal again for the new owner (§2.2). A waiting crystal still reverts with
-    `CrystalWaiting`. `TransfersNotOpen`, which refused every transfer until the reseal existed, is gone.
+    `CrystalWaiting`, and a transfer to Garden itself with `ERC721InvalidReceiver`. `TransfersNotOpen`, which refused
+    every transfer until the reseal existed, is gone.
   - **Views.** `crystalOf` returns new level and MANA handles after a transfer, and the same element handle. A transfer
     leaves `lastAccrual` and `pendingMana` as they were.
 
@@ -467,8 +473,8 @@ Every function is measured on `Garden` (`packages/garden/test/Hcu.t.sol`). Deplo
 ## 3. Toolchain
 
 - **Solidity:** solc 0.8.24, EVM `cancun`, the optimizer on at 200 runs; Foundry 1.7.1, pinned in CI.
-  - Every FHE call inlines its checks. At T07, `Garden` is 19,454 bytes with the optimizer, of the 24,576 allowed, so
-    5,122 are left. Without the optimizer it would be 32,043 and could not be deployed, so the optimizer is not
+  - Every FHE call inlines its checks. At T07, `Garden` is 19,506 bytes with the optimizer, of the 24,576 allowed, so
+    5,070 are left. Without the optimizer it would be 32,155 and could not be deployed, so the optimizer is not
     optional. At T06 the two figures were 19,262 and 31,805, at T05 16,662 and 27,824, and at T04 11,442 and 19,632.
   - Verification on Etherscan (T09) must use the same settings.
 - **Contract packages:** `@fhevm/solidity` ^0.13.4, `encrypted-types` ^0.0.4 (which `FHE.sol` imports, so every
@@ -516,7 +522,9 @@ Every function is measured on `Garden` (`packages/garden/test/Hcu.t.sol`). Deplo
 - **Privacy.**
   - A stranger cannot decrypt any crystal's values, and nobody else can recompute one of its handles in the same
     block (§2.2, Handles).
-  - After a transfer, the previous owner cannot decrypt the new level and MANA, even by recomputing the reseal.
+  - After a transfer, the previous owner cannot decrypt the new level and MANA, even by recomputing the reseal: walked
+    back through the executor's events, the new handles descend from a handle she can neither use nor make again.
+  - `GARDEN_ZERO` is granted to Garden alone.
   - Fuzzed over random sequences, transfers included, read from the ACL: each live crystal's level and MANA are granted
     to its owner and to no other player, and its element to every player that has ever owned it.
   - No event or revert differs between a rise, a refused rise and a hold, or between a duel whose stakes moved and
