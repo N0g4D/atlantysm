@@ -42,7 +42,8 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
         uint8[3] prizeShares;
     }
 
-    /// SEASON0.md §2.1. A crystal's handles are granted to this contract and to its owner only.
+    /// SEASON0.md §2.1. A crystal's handles are granted to this contract and to its owner only, and its element to every
+    /// previous owner too, who knew it already (RULES.md §4).
     struct Crystal {
         euint8 element; // 0 = Fire, 1 = Earth, 2 = Water
         euint8 level;
@@ -149,7 +150,8 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
     /// The deployment time, when season 1 starts.
     uint256 public immutable GENESIS;
     /// An encrypted zero that only this contract holds, drawn at construction. A value that must be unreachable starts
-    /// from it rather than from an encrypted plaintext 0, which anyone can reproduce.
+    /// from it rather than from an encrypted plaintext 0, which anyone can reproduce: every pot, and a transferred
+    /// crystal's new level and MANA.
     euint64 internal immutable GARDEN_ZERO;
 
     /// Live crystals: forged and not shattered.
@@ -195,7 +197,6 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
     error WrongCharge();
     error NotOwner();
     error ChargeNotReturned();
-    error TransfersNotOpen();
     error MissingProof();
     error ChoiceReused();
     error StakeOutOfBounds();
@@ -768,9 +769,10 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
     }
 
     /**
-     * @dev SEASON0.md §2.2, Accrual: plaintext, and first in every call that touches a crystal's MANA. Credits the
-     *      whole MANA accrued since `lastAccrual` to `crystal.mana`, and returns the new balance. `lastAccrual` moves
-     *      by whole MANA, not to now, so the remainder waits for the next call.
+     * @dev SEASON0.md §2.2, Accrual: plaintext, and first in every call that changes a crystal's balance or moves MANA
+     *      out of it. A transfer only seals the balance again, so it does not accrue. Credits the whole MANA accrued
+     *      since `lastAccrual` to `crystal.mana`, and returns the new balance. `lastAccrual` moves by whole MANA, not to
+     *      now, so the remainder waits for the next call.
      *
      *      The credit is stored, and kept for this contract, at once. So a call that reads `crystal.mana` afterwards,
      *      or accrues twice, still finds it. And a call that ends without granting the owner its balance cannot lock
@@ -813,18 +815,33 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
     }
 
     /**
-     * @dev Crystals only appear and disappear for now: forging mints, shattering burns. A transfer must seal the level
-     *      and MANA again for the new owner, so that the previous owner loses sight of them (RULES.md §4). Until it
-     *      does (T07), a transfer would leave them readable by the previous owner and unreadable by the new one, so
-     *      it is refused.
+     * @dev Every mint, burn and transfer passes here. A transfer between two accounts seals the level and MANA again for
+     *      the new owner, so that no previous owner can read them any more (RULES.md §4, SEASON0.md §2.2, Transfer).
+     *      The previous owner still holds the old handles and the element: combined with a plaintext zero, or with a zero
+     *      made from one of them as `forge` makes one from its draw, she could recompute the new handles in this block
+     *      and grant them to herself. Combined with GARDEN_ZERO, which only this contract holds, they are out of her
+     *      reach. The element keeps its handle, since every previous owner keeps knowing it (RULES.md §4), and the new
+     *      owner is allowed on it.
      */
-    function _update(address to, uint256 tokenId, address auth) internal override returns (address) {
-        if (to != address(0) && _ownerOf(tokenId) != address(0)) {
-            // RULES.md §4: a crystal waiting in an open lobby cannot be transferred. Checked first, so that the lock
-            // already holds when transfers open.
-            if (_crystals[tokenId].openLobby != 0) revert CrystalWaiting();
-            revert TransfersNotOpen();
+    function _update(address to, uint256 tokenId, address auth) internal override returns (address from) {
+        Crystal storage crystal = _crystals[tokenId];
+        // RULES.md §4: a crystal waiting in an open lobby cannot be transferred. Only a transfer can meet one: `forge`
+        // mints a crystal before it can wait, and `shatter` refuses a waiting crystal and clears it before burning it.
+        if (crystal.openLobby != 0) revert CrystalWaiting();
+        // This contract could never shatter a crystal of its own, so the charge would never come back (RULES.md §3,
+        // invariant 1). `safeTransferFrom` refuses already, since this contract takes no ERC-721, and `transferFrom`
+        // refuses with the same error.
+        if (to == address(this)) revert ERC721InvalidReceiver(to);
+        // The owner changes, and the caller's approval is checked, before any FHE call (SEASON0.md §2.3, rule 6).
+        from = super._update(to, tokenId, auth);
+        // A transfer to oneself is sealed again too: it loses nothing, and the condition stays this simple.
+        if (from != address(0) && to != address(0)) {
+            // `or` with a zero keeps the value, as `add` would, at a quarter of the cost. The balance keeps its value, so
+            // nothing here needs the accrual: the MANA accrued since `lastAccrual` stays pending, in public, and goes
+            // with the crystal to the new owner, who is credited it at the crystal's next action.
+            crystal.level = _seal(FHE.or(crystal.level, FHE.asEuint8(GARDEN_ZERO)), to);
+            crystal.mana = _seal(FHE.or(crystal.mana, GARDEN_ZERO), to);
+            FHE.allow(crystal.element, to);
         }
-        return super._update(to, tokenId, auth);
     }
 }

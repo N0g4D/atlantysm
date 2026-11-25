@@ -5,14 +5,7 @@ import {FHE, ebool, euint8, euint64, externalEbool} from "@fhevm/solidity/lib/FH
 import {ZamaEthereumConfig} from "@fhevm/solidity/config/ZamaConfig.sol";
 import {Vm} from "forge-std/Vm.sol";
 import {Garden} from "../src/Garden.sol";
-import {GardenFixture} from "./utils/GardenFixture.sol";
-
-/// The ACL lets an account allowed on a handle allow another one, and says who is allowed, for now or for good.
-interface IAcl {
-    function allow(bytes32 handle, address account) external;
-    function isAllowed(bytes32 handle, address account) external view returns (bool);
-    function isAllowedForDecryption(bytes32 handle) external view returns (bool);
-}
+import {GardenFixture, IAcl} from "./utils/GardenFixture.sol";
 
 /// Any contract: it encrypts the public facts a crystal is born with, and grants them to whoever it likes.
 contract Mimic is ZamaEthereumConfig {
@@ -102,6 +95,36 @@ contract DuelProber is ZamaEthereumConfig {
 
     function grant(ebool value, address to) external {
         FHE.allow(value, to);
+    }
+}
+
+/**
+ * @dev A contract that owns a crystal. It transfers the crystal, then in the same transaction, so in the same block,
+ *      tries to recompute the new level and MANA from what it still holds as their previous owner: the old handles. It
+ *      repeats the reseal's operations, so a change to the reseal must be made here too.
+ */
+contract ResealRecomputer is ZamaEthereumConfig {
+    function forge(Garden garden) external payable returns (uint256) {
+        return garden.forge{value: msg.value}();
+    }
+
+    function attune(Garden garden, uint256 tokenId, externalEbool rise, bytes calldata proof) external {
+        garden.attune(tokenId, rise, proof);
+    }
+
+    /// Transfers the crystal, then seals its old level and MANA again as Garden does, but with the zeros anyone can make,
+    /// a plaintext one and an encrypted one, and grants the results to `to`: the level twice, then the MANA twice.
+    /// Making the encrypted zeros leaves it allowed on them until the transaction ends.
+    function transferAndRecompute(Garden garden, uint256 tokenId, address newOwner, address to)
+        external
+        returns (bytes32[4] memory handles)
+    {
+        Garden.CrystalView memory before = garden.crystalOf(tokenId);
+        garden.transferFrom(address(this), newOwner, tokenId);
+        handles[0] = euint8.unwrap(FHE.allow(FHE.or(before.level, 0), to));
+        handles[1] = euint8.unwrap(FHE.allow(FHE.or(before.level, FHE.asEuint8(0)), to));
+        handles[2] = euint64.unwrap(FHE.allow(FHE.or(before.mana, 0), to));
+        handles[3] = euint64.unwrap(FHE.allow(FHE.or(before.mana, FHE.asEuint64(0)), to));
     }
 }
 
@@ -601,6 +624,180 @@ contract PrivacyTest is GardenFixture {
             abi.encodeWithSignature("ACLNotAllowed(bytes32,address)", euint64.unwrap(newPot), address(winner))
         );
         winner.addOne(newPot);
+    }
+
+    // -- Transfers ------------------------------------------------------------------------------------------------
+
+    /**
+     * RULES.md §4 and §9, and T07: on a transfer the level and MANA are sealed again for the new owner, so the previous
+     * owner loses sight of them. She cannot decrypt the new handles, nor can a stranger, and nothing is public. The new
+     * owner reads all three secrets. The element keeps its handle, which the previous owner still reads: she knew it,
+     * and it never changes. What she read before the transfer she can still read, but those handles are no longer the
+     * crystal's. And she loses sight for good: once the new owner attunes, she reads neither the new level nor the new
+     * MANA.
+     */
+    function testThePreviousOwnerCannotDecryptTheNewLevelAndMana() public {
+        uint256 tokenId = _forge(alice);
+        _wait(1 days);
+        _attune(alice, tokenId, true);
+        Garden.CrystalView memory before = garden.crystalOf(tokenId);
+        uint8 element = decrypt(before.element, address(garden), aliceKey);
+
+        _transfer(alice, bob, tokenId);
+
+        Garden.CrystalView memory crystal = garden.crystalOf(tokenId);
+        assertNotEq(euint8.unwrap(crystal.level), euint8.unwrap(before.level), "a new level handle");
+        assertNotEq(euint64.unwrap(crystal.mana), euint64.unwrap(before.mana), "a new MANA handle");
+        assertEq(euint8.unwrap(crystal.element), euint8.unwrap(before.element), "the same element handle");
+        assertEq(decrypt(crystal.element, address(garden), bobKey), element, "Bob reads the element");
+        assertEq(decrypt(crystal.level, address(garden), bobKey), 2, "the level");
+        assertEq(decrypt(crystal.mana, address(garden), bobKey), MANA_PER_DAY - LEVEL_COST, "and the MANA");
+
+        _assertCannotDecrypt(crystal.level, alice, aliceKey);
+        _assertCannotDecrypt(crystal.mana, alice, aliceKey);
+        _assertCannotDecrypt(crystal.level, stranger, strangerKey);
+        _assertCannotDecrypt(crystal.mana, stranger, strangerKey);
+        _assertCannotDecrypt(crystal.element, stranger, strangerKey);
+        _assertNotPublic(crystal.level);
+        _assertNotPublic(crystal.mana);
+        _assertNotPublic(crystal.element);
+        assertEq(decrypt(crystal.element, address(garden), aliceKey), element, "Alice still knows the element");
+        assertEq(decrypt(before.level, address(garden), aliceKey), 2, "and what she read before");
+
+        // Two more days give Bob's crystal the 200 MANA a rise from level 2 costs.
+        _wait(2 days);
+        _attune(bob, tokenId, true);
+        crystal = garden.crystalOf(tokenId);
+        assertEq(decrypt(crystal.level, address(garden), bobKey), 3, "Bob's rise");
+        _assertCannotDecrypt(crystal.level, alice, aliceKey);
+        _assertCannotDecrypt(crystal.mana, alice, aliceKey);
+    }
+
+    /**
+     * SEASON0.md §2.2, Handles and Transfer: the previous owner still holds the old level and MANA, and in the transfer's
+     * block can compute on anything made from them. Here a contract that owns a crystal transfers it to Bob and at once
+     * seals the old values again for Alice, as Garden does but with the zeros anyone can make: it gets the same values
+     * under other handles, which open nothing of the crystal's. Nor could it make the new handles any other way: walked
+     * back through the executor's events, each descends from GARDEN_ZERO, which it may not use, and which nobody but
+     * Garden can make (`testOnlyGardenHoldsItsZero`). The logs start before the crystal is forged, so the walk sees all
+     * of its history. A forge test is one transaction, so the attacker holds every transient grant it could have: the
+     * choice of its own attunement, and the zeros it encrypted.
+     */
+    function testThePreviousOwnerCannotRecomputeTheReseal() public {
+        vm.recordLogs();
+        ResealRecomputer previous = new ResealRecomputer();
+        uint256 tokenId = previous.forge{value: CHARGE}(garden);
+        _wait(1 days);
+        {
+            (externalEbool choice, bytes memory proof) = encryptBool(true, address(garden), address(previous));
+            previous.attune(garden, tokenId, choice, proof);
+        }
+        Garden.CrystalView memory before = garden.crystalOf(tokenId);
+
+        bytes32[4] memory recomputed = previous.transferAndRecompute(garden, tokenId, bob, alice);
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+
+        Garden.CrystalView memory crystal = garden.crystalOf(tokenId);
+        assertEq(plaintextOf(crystal.level), 2, "the level");
+        assertEq(plaintextOf(crystal.mana), MANA_PER_DAY - LEVEL_COST, "the MANA");
+        for (uint256 i; i < 2; i++) {
+            assertEq(plaintextOf(euint8.wrap(recomputed[i])), 2, "a recomputed level");
+            assertNotEq(recomputed[i], euint8.unwrap(crystal.level), "another level handle");
+            assertEq(plaintextOf(euint64.wrap(recomputed[2 + i])), MANA_PER_DAY - LEVEL_COST, "a recomputed MANA");
+            assertNotEq(recomputed[2 + i], euint64.unwrap(crystal.mana), "another MANA handle");
+        }
+        IAcl acl = IAcl(getCoprocessorConfig(address(garden)).ACLAddress);
+        assertFalse(acl.isAllowed(euint8.unwrap(crystal.level), address(previous)), "the attacker may use the level");
+        assertFalse(acl.isAllowed(euint64.unwrap(crystal.mana), address(previous)), "the attacker may use the MANA");
+        _assertCannotDecrypt(crystal.level, alice, aliceKey);
+        _assertCannotDecrypt(crystal.mana, alice, aliceKey);
+
+        assertTrue(_withinReach(logs, euint8.unwrap(before.level), address(previous)), "the old level, within reach");
+        assertTrue(_withinReach(logs, euint64.unwrap(before.mana), address(previous)), "the old MANA, within reach");
+        assertFalse(_withinReach(logs, euint8.unwrap(crystal.level), address(previous)), "the new level, within reach");
+        assertFalse(_withinReach(logs, euint64.unwrap(crystal.mana), address(previous)), "the new MANA, within reach");
+        assertTrue(_withinReach(logs, euint8.unwrap(crystal.level), bob), "the new owner holds the level");
+    }
+
+    /**
+     * The walk the two tests around this one rely on must see through operations, or it would find every handle out of
+     * reach and pass anything. What an owner's own attunement spent is granted to Garden alone, yet the owner could make
+     * it in that transaction from its level, its MANA and its choice: through a select, ands, comparisons, an addition
+     * of a plaintext, a cast, multiplications with and without a plaintext, and a trivial encryption. A stranger could
+     * not. The owner makes no handle of its own here, which would hand it grants that cut the walk short.
+     */
+    function testTheWalkSeesThroughOperations() public {
+        vm.recordLogs();
+        ResealRecomputer owner = new ResealRecomputer();
+        uint256 tokenId = owner.forge{value: CHARGE}(garden);
+        _wait(1 days);
+        (externalEbool choice, bytes memory proof) = encryptBool(true, address(garden), address(owner));
+        owner.attune(garden, tokenId, choice, proof);
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+
+        // The attunement's last step on the MANA is `sub(credited, spent)`, read from the executor's event.
+        bytes32 mana = euint64.unwrap(garden.crystalOf(tokenId).mana);
+        bytes32 spent;
+        address executor = getCoprocessorConfig(address(garden)).CoprocessorAddress;
+        bytes32 fheSub = keccak256("FheSub(address,bytes32,bytes32,bytes1,bytes32)");
+        for (uint256 i; i < logs.length; i++) {
+            if (logs[i].emitter != executor || logs[i].topics.length == 0 || logs[i].topics[0] != fheSub) continue;
+            (, bytes32 rhs,, bytes32 result) = abi.decode(logs[i].data, (bytes32, bytes32, bytes1, bytes32));
+            if (result == mana) spent = rhs;
+        }
+        assertNotEq(spent, bytes32(0), "the spent MANA");
+        assertEq(plaintextOf(euint64.wrap(spent)), LEVEL_COST, "a rise");
+        IAcl acl = IAcl(getCoprocessorConfig(address(garden)).ACLAddress);
+        assertFalse(acl.isAllowed(spent, address(owner)), "granted to the owner");
+        assertTrue(_withinReach(logs, spent, address(owner)), "within the owner's reach");
+        assertFalse(_withinReach(logs, spent, stranger), "within a stranger's reach");
+    }
+
+    /// SEASON0.md §2.2, Handles, and §2.3, rule 5: GARDEN_ZERO, which every pot and every reseal start from, is granted
+    /// to Garden alone, and not to its deployer. Read from the ACL's events of a deployment: one grant, to the new
+    /// contract, and nothing public.
+    function testOnlyGardenHoldsItsZero() public {
+        vm.recordLogs();
+        Garden deployed = new Garden(_seasonZero());
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+
+        bytes32[] memory granted = _assertGrantsOnlyTo(logs, address(deployed));
+        assertEq(granted.length, 1, "one grant, of GARDEN_ZERO");
+        _assertNothingPublic(logs);
+        IAcl acl = IAcl(getCoprocessorConfig(address(garden)).ACLAddress);
+        assertFalse(acl.isAllowed(granted[0], address(this)), "the deployer may use it");
+        assertFalse(_withinReach(logs, granted[0], address(this)), "the deployer could make it");
+    }
+
+    /// RULES.md §4 and §9, and SEASON0.md §2.3, rule 5. Read from the ACL's events, a transfer grants the new level and
+    /// MANA to the contract and the new owner, and the element to the new owner, who joins its previous owners on it.
+    /// It credits no MANA, so no credit is granted. The account that made the transfer, approved by the owner, gets
+    /// nothing, and nothing becomes publicly decryptable.
+    function testTransferringGrantsTheNewValuesToTheNewOwnerOnly() public {
+        (address operator, uint256 operatorKey) = makeAddrAndKey("operator");
+        uint256 tokenId = _forge(alice);
+        _wait(1 days);
+        vm.prank(alice);
+        garden.approve(operator, tokenId);
+
+        vm.recordLogs();
+        vm.prank(operator);
+        garden.transferFrom(alice, bob, tokenId);
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        _assertNothingPublic(logs);
+
+        Garden.CrystalView memory crystal = garden.crystalOf(tokenId);
+        Grant[] memory grants = new Grant[](5);
+        grants[0] = _grant(address(garden), crystal.level);
+        grants[1] = _grant(bob, crystal.level);
+        grants[2] = _grant(address(garden), crystal.mana);
+        grants[3] = _grant(bob, crystal.mana);
+        grants[4] = _grant(bob, crystal.element);
+        _assertGrants(logs, grants);
+
+        _assertCannotDecrypt(crystal.element, operator, operatorKey);
+        _assertCannotDecrypt(crystal.level, operator, operatorKey);
+        _assertCannotDecrypt(crystal.mana, operator, operatorKey);
     }
 
     /// Three Water crystals of the given owners, ranked first, second and third in season 1: they beat a Fire crystal

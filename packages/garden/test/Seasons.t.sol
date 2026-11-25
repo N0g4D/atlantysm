@@ -562,6 +562,26 @@ contract SeasonsTest is GardenFixture {
         assertEq(_balanceOf(water, bobKey), before + 50 + 2 * MIN_STAKE, "Water beats Fire, and takes both stakes");
     }
 
+    /// RULES.md §4 and §8: a place belongs to the crystal, and the close credits its share to the crystal, sealed for
+    /// whoever owns it then. A winner transferred after its win keeps its record and its place, and its share goes to its
+    /// new owner, alone in reading the balance.
+    function testAWinnersShareGoesToWhoeverOwnsItAtTheClose() public {
+        uint256 water = _forgeElement(bob, WATER);
+        uint256 fire = _forgeElement(alice, FIRE);
+        _publish(_fight(water, fire));
+        _shatterIntoThePot(1, 101);
+
+        _transfer(bob, carol, water);
+        _assertRecord(water, 1, 0);
+        _assertTop(1, water, 0, 0, "the place stays with the crystal");
+
+        _waitUntilClosable(1);
+        uint64 before = _balanceOf(water, carolKey);
+        _closeSeason(1);
+        assertEq(_balanceOf(water, carolKey) - before, 50, "the share, for Carol");
+        _assertCannotDecrypt(garden.crystalOf(water).mana, bob, bobKey);
+    }
+
     /**
      * RULES.md §8 and §9: the centre's total is never published, not even by closing the season. Two branches share one
      * public history: the same crystals, the same duels published in the same order, and in season 1 an attunement of

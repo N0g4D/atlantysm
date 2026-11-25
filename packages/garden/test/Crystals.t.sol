@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {euint16} from "@fhevm/solidity/lib/FHE.sol";
+import {FHE, euint8, euint16, euint64, externalEbool} from "@fhevm/solidity/lib/FHE.sol";
+import {ZamaEthereumConfig} from "@fhevm/solidity/config/ZamaConfig.sol";
 import {IERC721Errors} from "@openzeppelin/contracts/interfaces/draft-IERC6093.sol";
+import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
+import {IERC721Receiver} from "@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol";
 import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
 import {Vm} from "forge-std/Vm.sol";
 import {Garden} from "../src/Garden.sol";
@@ -49,6 +52,25 @@ contract Reenterer {
         catch (bytes memory reason) {
             reentryError = reason;
         }
+    }
+}
+
+/// A contract that takes crystals by `safeTransferFrom`, and notes whether, when called, it may already use the
+/// crystal's level and MANA.
+contract CrystalReceiver is ZamaEthereumConfig, IERC721Receiver {
+    Garden internal immutable garden;
+    bool public mayUseLevel;
+    bool public mayUseMana;
+
+    constructor(Garden garden_) {
+        garden = garden_;
+    }
+
+    function onERC721Received(address, address, uint256 tokenId, bytes calldata) external returns (bytes4) {
+        Garden.CrystalView memory crystal = garden.crystalOf(tokenId);
+        mayUseLevel = FHE.isAllowed(crystal.level, address(this));
+        mayUseMana = FHE.isAllowed(crystal.mana, address(this));
+        return IERC721Receiver.onERC721Received.selector;
     }
 }
 
@@ -250,24 +272,157 @@ contract CrystalsTest is GardenFixture {
         assertTrue(garden.supportsInterface(0x5b5e139f), "ERC-721 metadata");
     }
 
-    /// RULES.md §4, Ownership: a transfer must seal the level and MANA again for the new owner. Until it does (T07),
-    /// every transfer is refused, from the owner or from an approved account.
-    function testTransfersAreRefusedUntilTheySealTheCrystalAgain() public {
+    /// RULES.md §4, Ownership: crystals are transferable tokens, and their secrets travel with them. The new owner reads
+    /// the element, the level and the MANA the crystal had, and finds it among its crystals. The charge stays in the
+    /// contract, held against the crystal.
+    function testACrystalsSecretsTravelWithIt() public {
         uint256 tokenId = _forge(alice);
-        vm.prank(alice);
-        garden.approve(bob, tokenId);
+        _wait(1 days);
+        _attune(alice, tokenId, true);
+        Garden.CrystalView memory before = garden.crystalOf(tokenId);
+        uint8 element = decrypt(before.element, address(garden), aliceKey);
 
-        vm.expectRevert(Garden.TransfersNotOpen.selector);
-        vm.prank(alice);
-        garden.transferFrom(alice, bob, tokenId);
-        vm.expectRevert(Garden.TransfersNotOpen.selector);
-        vm.prank(alice);
-        garden.safeTransferFrom(alice, bob, tokenId);
-        vm.expectRevert(Garden.TransfersNotOpen.selector);
+        vm.expectEmit(address(garden));
+        emit IERC721.Transfer(alice, bob, tokenId);
+        _transfer(alice, bob, tokenId);
+
+        Garden.CrystalView memory crystal = garden.crystalOf(tokenId);
+        assertEq(crystal.owner, bob, "Bob's now");
+        assertEq(decrypt(crystal.element, address(garden), bobKey), element, "the element");
+        assertEq(decrypt(crystal.level, address(garden), bobKey), 2, "the level");
+        assertEq(decrypt(crystal.mana, address(garden), bobKey), MANA_PER_DAY - LEVEL_COST, "the MANA");
+        assertEq(crystal.lastAccrual, before.lastAccrual, "accruing as before");
+        assertEq(garden.balanceOf(alice), 0);
+        assertEq(garden.balanceOf(bob), 1);
+        _assertPage(bob, 0, 10, _ids(tokenId), 0);
+        _assertPage(alice, 0, 10, new uint256[](0), 0);
+        assertEq(garden.totalSupply(), 1);
+        assertEq(address(garden).balance, CHARGE);
+    }
+
+    /**
+     * RULES.md §4, Ownership: every way an ERC-721 changes hands seals the crystal again for its new owner:
+     * `transferFrom` and both `safeTransferFrom`, by the owner, by an account it approved or by an operator for all its
+     * crystals, and a transfer to oneself. After each one the level and MANA keep their values under new handles, which
+     * the new owner reads and the previous owner does not. The element keeps its handle, and everyone who has ever
+     * owned the crystal reads it. The operator that moved it for others reads nothing.
+     */
+    function testEveryWayToTransferSealsTheCrystalAgain() public {
+        (address carol, uint256 carolKey) = makeAddrAndKey("carol");
+        (address operator, uint256 operatorKey) = makeAddrAndKey("operator");
+        uint256 tokenId = _forge(alice);
+        _wait(1 days);
+        _attune(alice, tokenId, true);
+        uint8 element = decrypt(garden.crystalOf(tokenId).element, address(garden), aliceKey);
+
+        Garden.CrystalView memory before = garden.crystalOf(tokenId);
+        _transfer(alice, bob, tokenId);
+        _assertSealedAgain(tokenId, before, bobKey, alice, aliceKey);
+
+        before = garden.crystalOf(tokenId);
         vm.prank(bob);
-        garden.safeTransferFrom(alice, bob, tokenId, "");
+        garden.safeTransferFrom(bob, carol, tokenId);
+        _assertSealedAgain(tokenId, before, carolKey, bob, bobKey);
 
+        before = garden.crystalOf(tokenId);
+        vm.prank(carol);
+        garden.safeTransferFrom(carol, alice, tokenId, "a gift");
+        _assertSealedAgain(tokenId, before, aliceKey, carol, carolKey);
+
+        vm.prank(alice);
+        garden.approve(operator, tokenId);
+        before = garden.crystalOf(tokenId);
+        vm.prank(operator);
+        garden.transferFrom(alice, bob, tokenId);
+        _assertSealedAgain(tokenId, before, bobKey, alice, aliceKey);
+
+        vm.prank(bob);
+        garden.setApprovalForAll(operator, true);
+        before = garden.crystalOf(tokenId);
+        vm.prank(operator);
+        garden.safeTransferFrom(bob, carol, tokenId);
+        _assertSealedAgain(tokenId, before, carolKey, bob, bobKey);
+
+        // To oneself: sealed again, and still the owner's.
+        before = garden.crystalOf(tokenId);
+        _transfer(carol, carol, tokenId);
+        Garden.CrystalView memory crystal = garden.crystalOf(tokenId);
+        assertEq(crystal.owner, carol);
+        assertNotEq(euint8.unwrap(crystal.level), euint8.unwrap(before.level), "to oneself: a new level handle");
+        assertNotEq(euint64.unwrap(crystal.mana), euint64.unwrap(before.mana), "to oneself: a new MANA handle");
+        assertEq(decrypt(crystal.level, address(garden), carolKey), 2, "to oneself: the level");
+        assertEq(decrypt(crystal.mana, address(garden), carolKey), MANA_PER_DAY - LEVEL_COST, "to oneself: the MANA");
+
+        assertEq(decrypt(crystal.element, address(garden), aliceKey), element, "Alice still knows the element");
+        assertEq(decrypt(crystal.element, address(garden), bobKey), element, "so does Bob");
+        assertEq(decrypt(crystal.element, address(garden), carolKey), element, "and Carol");
+        _assertCannotDecrypt(crystal.element, operator, operatorKey);
+        _assertCannotDecrypt(crystal.level, operator, operatorKey);
+        _assertCannotDecrypt(crystal.mana, operator, operatorKey);
+    }
+
+    /// RULES.md §3, invariant 1, and §4: a transferred crystal is its new owner's to attune, to bring to the Arena and to
+    /// shatter, and its charge returns to the new owner. Its previous owner can do none of it, nor take it back.
+    function testTheNewOwnerActsAndThePreviousOneCannot() public {
+        uint256 tokenId = _forge(alice);
+        uint256 other = _forge(alice);
+        _wait(1 days);
+        _transfer(alice, bob, tokenId);
+
+        (externalEbool choice, bytes memory proof) = encryptBool(true, address(garden), alice);
+        vm.startPrank(alice);
+        vm.expectRevert(Garden.NotOwner.selector);
+        garden.attune(tokenId, choice, proof);
+        vm.expectRevert(Garden.NotOwner.selector);
+        garden.openLobby(tokenId, MIN_STAKE);
+        vm.expectRevert(Garden.NotOwner.selector);
+        garden.shatter(tokenId);
+        vm.expectRevert(abi.encodeWithSelector(IERC721Errors.ERC721InsufficientApproval.selector, alice, tokenId));
+        garden.transferFrom(bob, alice, tokenId);
+        vm.stopPrank();
+
+        _attune(bob, tokenId, true);
+        assertEq(decrypt(garden.crystalOf(tokenId).level, address(garden), bobKey), 2, "Bob's rise");
+        uint256 duelId = _duel(tokenId, other, MIN_STAKE);
+        assertEq(garden.duelOf(duelId).creatorCrystal, tokenId, "Bob's lobby");
+        _publish(duelId);
+
+        uint256 balance = bob.balance;
+        _shatter(bob, tokenId);
+        assertEq(bob.balance, balance + CHARGE, "the charge returns to the new owner");
+        assertEq(address(garden).balance, CHARGE, "the other crystal's charge stays");
+    }
+
+    /// RULES.md §3, invariant 1: Garden takes no crystal. It could never shatter one, so the charge would never come
+    /// back. Every way to transfer refuses it with the error `safeTransferFrom` gives any contract that takes no ERC-721.
+    function testGardenTakesNoCrystal() public {
+        uint256 tokenId = _forge(alice);
+        bytes memory refused = abi.encodeWithSelector(IERC721Errors.ERC721InvalidReceiver.selector, address(garden));
+
+        vm.startPrank(alice);
+        vm.expectRevert(refused);
+        garden.transferFrom(alice, address(garden), tokenId);
+        vm.expectRevert(refused);
+        garden.safeTransferFrom(alice, address(garden), tokenId);
+        vm.expectRevert(refused);
+        garden.safeTransferFrom(alice, address(garden), tokenId, "");
+        vm.stopPrank();
         assertEq(garden.ownerOf(tokenId), alice);
+    }
+
+    /// RULES.md §4: a contract that takes a crystal by `safeTransferFrom` is called once the crystal is sealed for it,
+    /// so it may already use the level and MANA when it is called.
+    function testAReceivingContractMayUseTheCrystalWhenCalled() public {
+        uint256 tokenId = _forge(alice);
+        CrystalReceiver receiver = new CrystalReceiver(garden);
+        _wait(1 days);
+
+        vm.prank(alice);
+        garden.safeTransferFrom(alice, address(receiver), tokenId);
+
+        assertEq(garden.ownerOf(tokenId), address(receiver));
+        assertTrue(receiver.mayUseLevel(), "the level");
+        assertTrue(receiver.mayUseMana(), "the MANA");
     }
 
     /// SEASON0.md §2.4: an owner's crystals, a page at a time. Shattered crystals drop out.
@@ -446,6 +601,27 @@ contract CrystalsTest is GardenFixture {
         assertEq(decrypt(crystal.mana, address(garden), ownerKey), 0, "no MANA");
         assertEq(crystal.lastAccrual, block.timestamp, "accrues from its forging");
         assertEq(crystal.pendingMana, 0);
+    }
+
+    /// After a transfer: the crystal is the owner's of `ownerKey`, and its level and MANA, 2 and 50 MANA in these tests,
+    /// keep their values under new handles, which the new owner reads and the previous owner does not. The element
+    /// keeps its handle.
+    function _assertSealedAgain(
+        uint256 tokenId,
+        Garden.CrystalView memory before,
+        uint256 ownerKey,
+        address previous,
+        uint256 previousKey
+    ) internal {
+        Garden.CrystalView memory crystal = garden.crystalOf(tokenId);
+        assertEq(crystal.owner, vm.addr(ownerKey), "the new owner");
+        assertNotEq(euint8.unwrap(crystal.level), euint8.unwrap(before.level), "a new level handle");
+        assertNotEq(euint64.unwrap(crystal.mana), euint64.unwrap(before.mana), "a new MANA handle");
+        assertEq(euint8.unwrap(crystal.element), euint8.unwrap(before.element), "the same element handle");
+        assertEq(decrypt(crystal.level, address(garden), ownerKey), 2, "the new owner reads the level");
+        assertEq(decrypt(crystal.mana, address(garden), ownerKey), MANA_PER_DAY - LEVEL_COST, "and the MANA");
+        _assertCannotDecrypt(crystal.level, previous, previousKey);
+        _assertCannotDecrypt(crystal.mana, previous, previousKey);
     }
 
     /// The one random value a forge draws, read from the executor's event.

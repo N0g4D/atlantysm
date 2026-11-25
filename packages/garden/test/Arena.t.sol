@@ -198,10 +198,13 @@ contract ArenaTest is GardenFixture {
         _assertOpenLobbies(_ids(aliceLobby, bobLobby));
     }
 
-    /// RULES.md §4 and SEASON0.md §5: a crystal waiting in an open lobby cannot be shattered or transferred, by its
-    /// owner or by an account the owner approved. Once its lobby is joined or cancelled, it can be shattered again.
-    /// It can still attune: RULES.md §4 locks only transfers and shattering, and the stake was put up already.
+    /// RULES.md §4 and SEASON0.md §5: a crystal waiting in an open lobby cannot be shattered or transferred: not by its
+    /// owner, to another account or to itself, by any of the three ways to transfer, nor by an account the owner
+    /// approved, for this crystal or for all of its crystals. Once its lobby is joined or cancelled, it can be
+    /// transferred and shattered again. It can still attune: RULES.md §4 locks only transfers and shattering, and the
+    /// stake was put up already.
     function testAWaitingCrystalCannotBeShatteredOrTransferred() public {
+        address operator = makeAddr("operator");
         uint256 a = _forge(alice);
         uint256 b = _forge(bob);
         uint256 c = _forge(alice);
@@ -215,18 +218,27 @@ contract ArenaTest is GardenFixture {
         garden.transferFrom(alice, bob, a);
         vm.expectRevert(Garden.CrystalWaiting.selector);
         garden.safeTransferFrom(alice, bob, a);
+        vm.expectRevert(Garden.CrystalWaiting.selector);
+        garden.safeTransferFrom(alice, bob, a, "a gift");
+        vm.expectRevert(Garden.CrystalWaiting.selector);
+        garden.transferFrom(alice, alice, a);
         garden.approve(bob, a);
+        garden.setApprovalForAll(operator, true);
         vm.stopPrank();
         vm.expectRevert(Garden.CrystalWaiting.selector);
         vm.prank(bob);
         garden.transferFrom(alice, bob, a);
+        vm.expectRevert(Garden.CrystalWaiting.selector);
+        vm.prank(operator);
+        garden.safeTransferFrom(alice, operator, a);
         assertEq(garden.ownerOf(a), alice);
 
         _attune(alice, a, true);
         assertEq(decrypt(garden.crystalOf(a).level, address(garden), aliceKey), 2, "a waiting crystal attunes");
 
         _join(lobbyId, b);
-        _shatter(alice, a);
+        _transfer(alice, bob, a);
+        _shatter(bob, a);
 
         lobbyId = _openLobby(c, STAKE);
         _wait(LOBBY_TIMEOUT);

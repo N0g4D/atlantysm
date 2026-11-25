@@ -1,22 +1,22 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {ebool, euint64, externalEbool} from "@fhevm/solidity/lib/FHE.sol";
+import {ebool, euint8, euint64, externalEbool} from "@fhevm/solidity/lib/FHE.sol";
 import {CommonBase} from "forge-std/Base.sol";
 import {StdUtils} from "forge-std/StdUtils.sol";
 import {Vm} from "forge-std/Vm.sol";
 import {Garden} from "../src/Garden.sol";
-import {GardenFixture} from "./utils/GardenFixture.sol";
+import {GardenFixture, IAcl} from "./utils/GardenFixture.sol";
 
 /**
- * @dev Drives Garden through random sequences of forging, attuning, shattering, opening, cancelling and joining lobbies,
- *      publishing duels, closing seasons and waiting, one transaction per call. It keeps its own plaintext model of what
- *      should hold, worked out from the rules alone: which crystals are live, the level and MANA of each, what each
- *      season's pot holds, which lobbies are open and what their creators put up, every crystal's record, and each
- *      season's scores, ranking and whether it is closed. The ranking is worked out by sorting every crystal with a
- *      win, not by inserting winners as Garden does. Two inputs come from Garden's draws, because only Garden makes them:
- *      each crystal's element, and the coin of a mirror between equal levels, read from the executor's event rather than
- *      from the outcome.
+ * @dev Drives Garden through random sequences of forging, attuning, shattering, transferring, opening, cancelling and
+ *      joining lobbies, publishing duels, closing seasons and waiting, one transaction per call. It keeps its own
+ *      plaintext model of what should hold, worked out from the rules alone: which crystals are live, who has ever owned
+ *      each, the level and MANA of each, what each season's pot holds, which lobbies are open and what their creators put
+ *      up, every crystal's record, and each season's scores, ranking and whether it is closed. The ranking is worked out
+ *      by sorting every crystal with a win, not by inserting winners as Garden does. Two inputs come from Garden's draws,
+ *      because only Garden makes them: each crystal's element, and the coin of a mirror between equal levels, read from
+ *      the executor's event rather than from the outcome.
  */
 contract GardenHandler is CommonBase, StdUtils {
     /// RULES.md §12. Copies rather than Garden's own values, so that what the handler expects does not rest on the
@@ -83,6 +83,9 @@ contract GardenHandler is CommonBase, StdUtils {
     uint256 public published;
 
     mapping(uint256 tokenId => bool) internal alive;
+    /// The players that have owned each crystal: its forger, and everyone it was transferred to.
+    mapping(uint256 tokenId => mapping(address actor => bool)) public everOwned;
+    uint256 public transfers;
     mapping(uint256 season => mapping(uint256 tokenId => Score)) internal scores;
     /// The crystals with a win counted in each season, in no order.
     mapping(uint256 season => uint256[]) internal ranked;
@@ -106,6 +109,7 @@ contract GardenHandler is CommonBase, StdUtils {
         uint256 tokenId = garden.forge{value: charge}();
         live.push(tokenId);
         alive[tokenId] = true;
+        everOwned[tokenId][actor] = true;
         forgedAt[tokenId] = block.timestamp;
         lastCreditAt[tokenId] = block.timestamp;
         levelOf[tokenId] = 1;
@@ -146,6 +150,21 @@ contract GardenHandler is CommonBase, StdUtils {
 
         vm.prank(garden.ownerOf(tokenId));
         garden.shatter(tokenId);
+    }
+
+    /// RULES.md §4: a crystal changes hands with its secrets, and a crystal waiting in a lobby cannot, so the handler only
+    /// transfers free ones, to the player the seed picks, its owner included. Nothing in the model changes but who owns
+    /// the crystal: its level, its MANA and what it has accrued go with it.
+    function transfer(uint256 crystalSeed, uint256 actorSeed) external {
+        (uint256 index, bool found) = _free(crystalSeed);
+        if (!found) return;
+        uint256 tokenId = live[index];
+        address owner = garden.ownerOf(tokenId);
+        address to = actors[bound(actorSeed, 0, actors.length - 1)];
+        vm.prank(owner);
+        garden.transferFrom(owner, to, tokenId);
+        everOwned[tokenId][to] = true;
+        transfers++;
     }
 
     /// RULES.md §7: the creator puts up the stake if its MANA covers it, and nothing otherwise.
@@ -316,6 +335,10 @@ contract GardenHandler is CommonBase, StdUtils {
 
     function liveCrystals() external view returns (uint256[] memory) {
         return live;
+    }
+
+    function players() external view returns (address[] memory) {
+        return actors;
     }
 
     function lobbiesOpen() external view returns (uint256[] memory) {
@@ -531,6 +554,32 @@ contract ConservationTest is GardenFixture {
         }
     }
 
+    /// RULES.md §3, invariant 3, §4 and §9, and SEASON0.md §2.3, rule 5: whatever the sequence of calls, each live
+    /// crystal's level and MANA are granted to its owner and to no other player, and its element to every player that
+    /// has ever owned it and to no other. Read from the ACL. A transfer leaves the previous owners on the element, which
+    /// they knew, and on nothing else.
+    /// forge-config: default.invariant.runs = 64
+    /// forge-config: default.invariant.depth = 64
+    /// forge-config: default.invariant.fail-on-revert = true
+    function invariant_onlyTheOwnerReadsACrystal() public view {
+        IAcl acl = IAcl(getCoprocessorConfig(address(garden)).ACLAddress);
+        address[] memory players = handler.players();
+        uint256[] memory live = handler.liveCrystals();
+        for (uint256 i; i < live.length; i++) {
+            Garden.CrystalView memory crystal = garden.crystalOf(live[i]);
+            for (uint256 j; j < players.length; j++) {
+                bool owns = players[j] == crystal.owner;
+                assertEq(acl.isAllowed(euint8.unwrap(crystal.level), players[j]), owns, "the level");
+                assertEq(acl.isAllowed(euint64.unwrap(crystal.mana), players[j]), owns, "the MANA");
+                assertEq(
+                    acl.isAllowed(euint8.unwrap(crystal.element), players[j]),
+                    handler.everOwned(live[i], players[j]),
+                    "the element"
+                );
+            }
+        }
+    }
+
     /// The invariants hold on a known sequence through the handler, one that takes every path of its model: a rise,
     /// a refused rise, a hold, a rise into the next season's pot, and a shatter after a rise. Random runs explore
     /// further, but nothing guarantees that a given run reaches a rise.
@@ -554,6 +603,7 @@ contract ConservationTest is GardenFixture {
         invariant_levelsManaAndPotsFollowTheRules();
         invariant_lobbiesAndRecordsFollowTheRules();
         invariant_seasonsFollowTheRules();
+        invariant_onlyTheOwnerReadsACrystal();
     }
 
     /// The same for the Arena: a duel whose stakes move, one where only the creator covers the stake, one where neither
@@ -609,6 +659,7 @@ contract ConservationTest is GardenFixture {
         invariant_levelsManaAndPotsFollowTheRules();
         invariant_lobbiesAndRecordsFollowTheRules();
         invariant_seasonsFollowTheRules();
+        invariant_onlyTheOwnerReadsACrystal();
     }
 
     /**
@@ -683,6 +734,47 @@ contract ConservationTest is GardenFixture {
         invariant_levelsManaAndPotsFollowTheRules();
         invariant_lobbiesAndRecordsFollowTheRules();
         invariant_seasonsFollowTheRules();
+        invariant_onlyTheOwnerReadsACrystal();
+    }
+
+    /**
+     * The same for transfers. Alice's crystal goes to Bob, who attunes it, filling season 1's centre, and brings it to
+     * the Arena against Carol's. After the result, Alice's crystal goes back to her and Carol's to Bob, so that whichever
+     * won is ranked first under a new owner when season 1 is closed, and its share is sealed for that owner. Bob also
+     * transfers his own crystal to himself. Each crystal is picked by its index among the live ones.
+     */
+    function testTheInvariantsHoldOnAKnownTransferSequence() public {
+        handler.forge(0);
+        handler.forge(1);
+        handler.forge(2);
+        handler.wait(1 days);
+        handler.transfer(0, 1);
+        handler.attune(0, true);
+        handler.openLobby(0, 40);
+        handler.joinLobby(0, 2);
+        handler.publish(0);
+        handler.transfer(0, 0);
+        handler.transfer(2, 1);
+        handler.transfer(1, 1);
+        handler.wait(2 days);
+        handler.wait(1 hours);
+        handler.closeSeason(0);
+
+        assertEq(handler.transfers(), 4, "transfers");
+        assertEq(handler.rises(), 1, "Bob's rise");
+        assertEq(handler.stakesMoved(), 1, "both covered the stake");
+        assertEq(handler.closes(), 1, "season 1 closed");
+        assertEq(handler.sharesPaid(), 1, "the winner's share");
+        assertEq(garden.ownerOf(1), alice, "back to Alice");
+        assertEq(garden.ownerOf(3), bob, "Carol's crystal, now Bob's");
+        assertTrue(handler.everOwned(1, bob) && handler.everOwned(3, makeAddr("carol")), "the previous owners");
+
+        invariant_theBalanceIsTheChargeOfEveryLiveCrystal();
+        invariant_manaIsConserved();
+        invariant_levelsManaAndPotsFollowTheRules();
+        invariant_lobbiesAndRecordsFollowTheRules();
+        invariant_seasonsFollowTheRules();
+        invariant_onlyTheOwnerReadsACrystal();
     }
 
     /// The stakes the open lobbies hold, read from Garden: each creator's stake if it put it up.

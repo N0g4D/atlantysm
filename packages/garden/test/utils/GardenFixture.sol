@@ -6,6 +6,13 @@ import {TestFhevm} from "@fhevm/forge/TestFhevm.sol";
 import {Vm} from "forge-std/Vm.sol";
 import {Garden} from "../../src/Garden.sol";
 
+/// The ACL lets an account allowed on a handle allow another one, and says who is allowed, for now or for good.
+interface IAcl {
+    function allow(bytes32 handle, address account) external;
+    function isAllowed(bytes32 handle, address account) external view returns (bool);
+    function isAllowedForDecryption(bytes32 handle) external view returns (bool);
+}
+
 /**
  * @dev A Garden with the Season 0 parameters of RULES.md §12, two players and a stranger, and the checks the privacy
  *      tests share: who was granted what, and who cannot decrypt.
@@ -35,6 +42,18 @@ abstract contract GardenFixture is TestFhevm {
 
     /// The executor's event for a random value: the coprocessor draws it from this, and a test reads it back.
     bytes32 internal constant FHE_RAND = keccak256("FheRand(address,uint8,bytes16,bytes32)");
+    /// The executor's other events that make a handle without an encrypted operand, or from other handles.
+    bytes32 internal constant FHE_RAND_BOUNDED = keccak256("FheRandBounded(address,uint256,uint8,bytes16,bytes32)");
+    bytes32 internal constant TRIVIAL_ENCRYPT = keccak256("TrivialEncrypt(address,uint256,uint8,bytes32)");
+    bytes32 internal constant FHE_CAST = keccak256("Cast(address,bytes32,uint8,bytes32)");
+    bytes32 internal constant FHE_NEG = keccak256("FheNeg(address,bytes32,bytes32)");
+    bytes32 internal constant FHE_NOT = keccak256("FheNot(address,bytes32,bytes32)");
+    bytes32 internal constant FHE_SELECT = keccak256("FheIfThenElse(address,bytes32,bytes32,bytes32,bytes32)");
+    bytes32 internal constant FHE_IS_IN = keccak256("FheIsIn(address,bytes32,bytes32[],bytes32)");
+    bytes32 internal constant FHE_SUM = keccak256("FheSum(address,bytes32[],bytes32)");
+    /// The executor's events that make no handle from others: its proxy's, and an imported input's (VERIFY_INPUT).
+    bytes32 internal constant EXECUTOR_INITIALIZED = keccak256("Initialized(uint64)");
+    bytes32 internal constant EXECUTOR_UPGRADED = keccak256("Upgraded(address)");
     /// The ACL's events for a persistent grant, and for handles made publicly decryptable.
     bytes32 internal constant ACL_ALLOWED = keccak256("Allowed(address,address,bytes32)");
     bytes32 internal constant ACL_PUBLIC = keccak256("AllowedForDecryption(address,bytes32[])");
@@ -96,6 +115,12 @@ abstract contract GardenFixture is TestFhevm {
     function _shatter(address owner, uint256 tokenId) internal {
         vm.prank(owner);
         garden.shatter(tokenId);
+    }
+
+    /// The owner transfers the crystal (RULES.md §4, Ownership).
+    function _transfer(address owner, address to, uint256 tokenId) internal {
+        vm.prank(owner);
+        garden.transferFrom(owner, to, tokenId);
     }
 
     /// The owner attunes with a choice encrypted for Garden and the owner, as the owner's client would send it.
@@ -384,6 +409,93 @@ abstract contract GardenFixture is TestFhevm {
             }
             revealed = joined;
         }
+    }
+
+    // -- Who could make a handle ----------------------------------------------------------------------------
+
+    /**
+     * @dev Whether `account` could get `handle` in the block of `logs` from what it holds and what anyone can make
+     *      (SEASON0.md §2.2, Handles): it is allowed on the handle, or the handle was made in `logs` by an operation
+     *      whose every encrypted operand is within its reach. Then it can repeat the operation through a contract of its
+     *      own, get the same handle, and grant it to anyone.
+     *      - A plaintext operand and a trivial encryption are within anyone's reach, a random draw only within its
+     *        maker's, and an imported input only within its submitter's, which the ACL check covers.
+     *      - A handle made before `logs` counts only if the account is allowed on it. So a test records the logs from
+     *        before the crystals it looks at were forged, and then the only handle made earlier is GARDEN_ZERO, drawn at
+     *        the deployment, which nobody but Garden can make (`testOnlyGardenHoldsItsZero`).
+     *      - It ignores blocks, and counts every transient grant the account holds in the test, so it can only overstate
+     *        what is within reach: a handle it finds out of reach is.
+     *      - It reverts on an executor event it does not know, rather than call its handle out of reach.
+     *      - It recurses without memoizing, which suits one crystal's history, not a fuzzed one.
+     */
+    function _withinReach(Vm.Log[] memory logs, bytes32 handle, address account) internal returns (bool) {
+        if (IAcl(getCoprocessorConfig(address(garden)).ACLAddress).isAllowed(handle, account)) return true;
+        address executor = getCoprocessorConfig(address(garden)).CoprocessorAddress;
+        for (uint256 i; i < logs.length; i++) {
+            if (logs[i].emitter != executor || logs[i].topics.length == 0) continue;
+            bytes32 topic = logs[i].topics[0];
+            bytes memory data = logs[i].data;
+            if (_takesTwo(topic)) {
+                (bytes32 lhs, bytes32 rhs, bytes1 scalar, bytes32 result) =
+                    abi.decode(data, (bytes32, bytes32, bytes1, bytes32));
+                if (result == handle) {
+                    return _withinReach(logs, lhs, account) && (scalar == 0x01 || _withinReach(logs, rhs, account));
+                }
+            } else if (topic == FHE_CAST) {
+                (bytes32 operand,, bytes32 result) = abi.decode(data, (bytes32, uint8, bytes32));
+                if (result == handle) return _withinReach(logs, operand, account);
+            } else if (topic == FHE_NEG || topic == FHE_NOT) {
+                (bytes32 operand, bytes32 result) = abi.decode(data, (bytes32, bytes32));
+                if (result == handle) return _withinReach(logs, operand, account);
+            } else if (topic == FHE_SELECT) {
+                (bytes32 control, bytes32 ifTrue, bytes32 ifFalse, bytes32 result) =
+                    abi.decode(data, (bytes32, bytes32, bytes32, bytes32));
+                if (result == handle) {
+                    return _withinReach(logs, control, account) && _withinReach(logs, ifTrue, account)
+                        && _withinReach(logs, ifFalse, account);
+                }
+            } else if (topic == FHE_IS_IN) {
+                (bytes32 value, bytes32[] memory values, bytes32 result) = abi.decode(data, (bytes32, bytes32[], bytes32));
+                if (result == handle) return _withinReach(logs, value, account) && _allWithinReach(logs, values, account);
+            } else if (topic == FHE_SUM) {
+                (bytes32[] memory values, bytes32 result) = abi.decode(data, (bytes32[], bytes32));
+                if (result == handle) return _allWithinReach(logs, values, account);
+            } else if (topic == TRIVIAL_ENCRYPT) {
+                (,, bytes32 result) = abi.decode(data, (uint256, uint8, bytes32));
+                if (result == handle) return true;
+            } else if (topic == FHE_RAND) {
+                (,, bytes32 result) = abi.decode(data, (uint8, bytes16, bytes32));
+                if (result == handle) return false;
+            } else if (topic == FHE_RAND_BOUNDED) {
+                (,,, bytes32 result) = abi.decode(data, (uint256, uint8, bytes16, bytes32));
+                if (result == handle) return false;
+            } else if (topic != VERIFY_INPUT && topic != EXECUTOR_INITIALIZED && topic != EXECUTOR_UPGRADED) {
+                revert("an executor event the walk does not know");
+            }
+        }
+        return false;
+    }
+
+    function _allWithinReach(Vm.Log[] memory logs, bytes32[] memory handles, address account) internal returns (bool) {
+        for (uint256 i; i < handles.length; i++) {
+            if (!_withinReach(logs, handles[i], account)) return false;
+        }
+        return true;
+    }
+
+    /// Whether the executor's event is one of its operations on two operands, the second a plaintext when its scalar
+    /// byte is 1.
+    function _takesTwo(bytes32 topic) internal pure returns (bool) {
+        string[20] memory names = [
+            "FheAdd", "FheBitAnd", "FheBitOr", "FheBitXor", "FheDiv", "FheEq", "FheGe", "FheGt", "FheLe", "FheLt",
+            "FheMax", "FheMin", "FheMul", "FheNe", "FheRem", "FheRotl", "FheRotr", "FheShl", "FheShr", "FheSub"
+        ];
+        for (uint256 i; i < names.length; i++) {
+            if (topic == keccak256(bytes(string.concat(names[i], "(address,bytes32,bytes32,bytes1,bytes32)")))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // -- What an outsider sees ------------------------------------------------------------------------------
