@@ -32,8 +32,8 @@ bug fix.
 1. **The charge is never at stake.** Only MANA moves in the Arena. Shattering a crystal always returns its charge
    to its owner.
 2. **Every crystal is born equal**: the same charge, level 1, and an element drawn by chance.
-3. **Hidden by default.** A crystal's element, level and MANA can be read by its owner only. A duel publishes who
-   won and who lost, and nothing else.
+3. **Hidden by default.** The game lets only a crystal's owner read its level and MANA, and only those who own it or
+   have owned it read its element (§4). A duel publishes who won and who lost, and nothing else.
 4. **Nobody can read or alter the secrets, the builders included.** The contract that holds them has no admin
    functions and cannot be upgraded; a fix means a new deployment. The decryption keys belong to Zama's threshold
    network, so no single party can decrypt.
@@ -62,9 +62,24 @@ returns the charge, a crystal is never worth less than its charge. On any market
 everything above it is the price of the crystal's level, element and record.
 
 **Ownership.** Crystals are transferable tokens (ERC-721), and their secrets travel with them. On a transfer the
-level and MANA are sealed again for the new owner, so previous owners lose sight of them. The element cannot be
-sealed again in the same way: it never changes, so everyone who has ever owned the crystal keeps knowing it. A
+level and MANA are sealed again for the new owner, so previous owners can no longer read them. The element cannot
+be sealed again in the same way: it never changes, so everyone who has ever owned the crystal keeps knowing it. A
 crystal waiting in an open lobby cannot be transferred or shattered.
+
+**What a transfer leaves behind.** A previous owner keeps what it read, and can prove it to anyone: the element for
+good, and the level and MANA as they were at the transfer. Until the crystal attunes again, its level is still the
+one the previous owner saw, and its balance what it saw plus the crystal's public income, give or take the stakes of
+its duels and any prize it takes (§5, §8). So a seller can reveal a crystal's element to the whole Arena at any
+time after the sale, and the buyer cannot undo it. No code can prevent this while the element never changes:
+whoever buys a crystal accepts it.
+
+An account that the owner approves to move a crystal, alone or with all its crystals as marketplaces ask, can read
+it too. It can move the crystal to itself and back in one transaction, which leaves only two public transfers
+behind, and from then on it counts as a previous owner. Approving an account already means trusting it with the
+crystal, which it could simply take.
+
+The new owner, for its part, reads the crystal as it is, and with its public record can sometimes work out what its
+previous owners did with it: how its attunements went, whether its stakes moved, and what a prize it took was worth.
 
 **Record.** Every crystal's wins and losses are public and permanent.
 
@@ -76,8 +91,8 @@ charges, divided equally among crystals.
 
 A crystal's balance is encrypted. From the public flow and the crystal's stakes and results, anyone can work out
 the most MANA it can have received, but not whether each stake moved (§7). Once a crystal has attuned, nobody else
-can tell how much it has spent or has left. One that has never attuned has spent nothing in secret, so others can
-often work out its balance.
+can tell how much it has spent or has left, beyond what a previous owner saw before a transfer (§4). One that has
+never attuned has spent nothing in secret, so others can often work out its balance.
 
 ## 6. The Sanctuary: levels
 
@@ -100,7 +115,8 @@ centre holds across all seasons.
 **What others can know.** From a crystal's public income and record, anyone can work out the highest level it
 could have reached. Attunements are public too, so a crystal stands at most one level above the number of times it
 has attuned, and one that has never attuned is at level 1. A *hold* adds to that count without a rise, so the count
-says no more. Nobody else ever learns the level it has.
+says no more. Nobody else ever learns the level it has, except a previous owner, until the crystal attunes again
+(§4).
 
 ## 7. The Arena: duels
 
@@ -124,7 +140,8 @@ moves only when both crystals have covered it, and then the winner takes both. O
 own and no MANA moves. The duel itself shows nobody outside it which happened, because the outcome does not depend on
 it. Public history can still settle it, when it settles whether each crystal could cover the stake: a crystal forged
 too recently to have received the stake cannot, and one that has never attuned often has a balance others can work
-out (§5). Each of the two players can always tell, from its own balance.
+out (§5). Each of the two players can always tell, from its own balance, and so, sometimes, can those who owned
+either crystal before or own it later (§4).
 
 **Resolution.** The duel is fought the moment the challenger joins. The outcome is computed on encrypted data, and
 any stakes move at once, still encrypted. Then only the winner is decrypted and published, with a proof that the
@@ -149,9 +166,10 @@ same crystals take the same shares.
 **50%, 30% and 20%** *(parameter)*, each rounded down. Its total is never published: with few players, it would
 reveal what individual crystals had spent. Each winner sees only its own share, and since the split is fixed, it can
 work out the total from that share once the season is closed, to within a few MANA because of the rounding. Nobody
-else can, unless it already knows the total from its own payments (§6); and whoever knows the total knows every
-share. A share with no crystal to take it, because fewer than three were ranked or one was shattered before the
-close, stays in the centre for the season in progress at the close, with what the rounding leaves.
+else can, unless it already knows the total from its own payments (§6), or later owns a winner and can tell its
+share from the rest of its balance (§4); and whoever knows the total knows every share. A share with no crystal to
+take it, because fewer than three were ranked or one was shattered before the close, stays in the centre for the
+season in progress at the close, with what the rounding leaves.
 
 **Known weaknesses.** A player with several crystals can duel themselves to inflate their wins, and no on-chain
 ranking can rule that out entirely. A lobby's creator can also refuse any challenger: it sees the challenger's
@@ -170,16 +188,16 @@ to a crystal that has not yet received the stake.
 
 | Data | Who can read it |
 |---|---|
-| A crystal's element | Its owner, and everyone who has ever owned it |
-| Its level | Its owner |
-| Its MANA balance | Its owner |
-| What an attunement did | Its owner; others see only that one happened |
+| A crystal's element | Its owner, and everyone who has ever owned it, who can also prove it to anyone (§4) |
+| Its level | Its owner. A previous owner keeps the one it saw, true until the crystal attunes again (§4) |
+| Its MANA balance | Its owner. A previous owner keeps the one it saw at the transfer (§4) |
+| What an attunement did | Its owner; others see only that one happened. A later owner can sometimes work out what earlier ones did (§4) |
 | The charge | Everyone (it is the same for every crystal) |
 | Lobbies and stakes | Everyone |
 | Who won a duel | Everyone |
-| Whether a duel's stakes moved | The two players; others only when public history settles whether each crystal could cover the stake (§7) |
+| Whether a duel's stakes moved | The two players, and sometimes the crystals' owners before or after them (§4); others only when public history settles whether each crystal could cover the stake (§7) |
 | A crystal's record | Everyone |
-| The centre's total | Nobody reads it. It can be worked out from one's own payments into it and, to within a few MANA, by a closed season's top three (§6, §8) |
+| The centre's total | Nobody reads it. It can be worked out from one's own payments into it and, to within a few MANA, by a closed season's top three, and sometimes by their later owners (§4, §6, §8) |
 
 ## 10. Why the game needs encryption
 
