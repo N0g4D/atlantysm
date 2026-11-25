@@ -51,6 +51,9 @@ abstract contract GardenFixture is TestFhevm {
     bytes32 internal constant FHE_SELECT = keccak256("FheIfThenElse(address,bytes32,bytes32,bytes32,bytes32)");
     bytes32 internal constant FHE_IS_IN = keccak256("FheIsIn(address,bytes32,bytes32[],bytes32)");
     bytes32 internal constant FHE_SUM = keccak256("FheSum(address,bytes32[],bytes32)");
+    /// The executor's events that make no handle from others: its proxy's, and an imported input's (VERIFY_INPUT).
+    bytes32 internal constant EXECUTOR_INITIALIZED = keccak256("Initialized(uint64)");
+    bytes32 internal constant EXECUTOR_UPGRADED = keccak256("Upgraded(address)");
     /// The ACL's events for a persistent grant, and for handles made publicly decryptable.
     bytes32 internal constant ACL_ALLOWED = keccak256("Allowed(address,address,bytes32)");
     bytes32 internal constant ACL_PUBLIC = keccak256("AllowedForDecryption(address,bytes32[])");
@@ -411,13 +414,19 @@ abstract contract GardenFixture is TestFhevm {
     // -- Who could make a handle ----------------------------------------------------------------------------
 
     /**
-     * @dev Whether `account` could get `handle` in this transaction from what it holds and what anyone can make
+     * @dev Whether `account` could get `handle` in the block of `logs` from what it holds and what anyone can make
      *      (SEASON0.md §2.2, Handles): it is allowed on the handle, or the handle was made in `logs` by an operation
      *      whose every encrypted operand is within its reach. Then it can repeat the operation through a contract of its
-     *      own, get the same handle, and grant it to anyone. A plaintext operand and a trivial encryption are within
-     *      anyone's reach, a random draw only within its maker's. A handle made before `logs` counts only if the account
-     *      is allowed on it, so a test records the logs from before the crystals it looks at were forged, and then the
-     *      only handle made earlier is GARDEN_ZERO, drawn at the deployment.
+     *      own, get the same handle, and grant it to anyone.
+     *      - A plaintext operand and a trivial encryption are within anyone's reach, a random draw only within its
+     *        maker's, and an imported input only within its submitter's, which the ACL check covers.
+     *      - A handle made before `logs` counts only if the account is allowed on it. So a test records the logs from
+     *        before the crystals it looks at were forged, and then the only handle made earlier is GARDEN_ZERO, drawn at
+     *        the deployment, which nobody but Garden can make (`testOnlyGardenHoldsItsZero`).
+     *      - It ignores blocks, and counts every transient grant the account holds in the test, so it can only overstate
+     *        what is within reach: a handle it finds out of reach is.
+     *      - It reverts on an executor event it does not know, rather than call its handle out of reach.
+     *      - It recurses without memoizing, which suits one crystal's history, not a fuzzed one.
      */
     function _withinReach(Vm.Log[] memory logs, bytes32 handle, address account) internal returns (bool) {
         if (IAcl(getCoprocessorConfig(address(garden)).ACLAddress).isAllowed(handle, account)) return true;
@@ -429,10 +438,10 @@ abstract contract GardenFixture is TestFhevm {
             if (_takesTwo(topic)) {
                 (bytes32 lhs, bytes32 rhs, bytes1 scalar, bytes32 result) =
                     abi.decode(data, (bytes32, bytes32, bytes1, bytes32));
-                if (result != handle) continue;
-                return _withinReach(logs, lhs, account) && (scalar == 0x01 || _withinReach(logs, rhs, account));
-            }
-            if (topic == FHE_CAST) {
+                if (result == handle) {
+                    return _withinReach(logs, lhs, account) && (scalar == 0x01 || _withinReach(logs, rhs, account));
+                }
+            } else if (topic == FHE_CAST) {
                 (bytes32 operand,, bytes32 result) = abi.decode(data, (bytes32, uint8, bytes32));
                 if (result == handle) return _withinReach(logs, operand, account);
             } else if (topic == FHE_NEG || topic == FHE_NOT) {
@@ -460,6 +469,8 @@ abstract contract GardenFixture is TestFhevm {
             } else if (topic == FHE_RAND_BOUNDED) {
                 (,,, bytes32 result) = abi.decode(data, (uint256, uint8, bytes16, bytes32));
                 if (result == handle) return false;
+            } else if (topic != VERIFY_INPUT && topic != EXECUTOR_INITIALIZED && topic != EXECUTOR_UPGRADED) {
+                revert("an executor event the walk does not know");
             }
         }
         return false;

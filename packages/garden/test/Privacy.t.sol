@@ -678,9 +678,10 @@ contract PrivacyTest is GardenFixture {
      * block can compute on anything made from them. Here a contract that owns a crystal transfers it to Bob and at once
      * seals the old values again for Alice, as Garden does but with the zeros anyone can make: it gets the same values
      * under other handles, which open nothing of the crystal's. Nor could it make the new handles any other way: walked
-     * back through the executor's events, each descends from GARDEN_ZERO, which it can neither use nor make. The logs
-     * start before the crystal is forged, so the walk sees all of its history. A forge test is one transaction, so the
-     * attacker holds every transient grant it could have: the choice of its own attunement, and the zeros it encrypted.
+     * back through the executor's events, each descends from GARDEN_ZERO, which it may not use, and which nobody but
+     * Garden can make (`testOnlyGardenHoldsItsZero`). The logs start before the crystal is forged, so the walk sees all
+     * of its history. A forge test is one transaction, so the attacker holds every transient grant it could have: the
+     * choice of its own attunement, and the zeros it encrypted.
      */
     function testThePreviousOwnerCannotRecomputeTheReseal() public {
         vm.recordLogs();
@@ -716,6 +717,40 @@ contract PrivacyTest is GardenFixture {
         assertFalse(_withinReach(logs, euint8.unwrap(crystal.level), address(previous)), "the new level, within reach");
         assertFalse(_withinReach(logs, euint64.unwrap(crystal.mana), address(previous)), "the new MANA, within reach");
         assertTrue(_withinReach(logs, euint8.unwrap(crystal.level), bob), "the new owner holds the level");
+    }
+
+    /**
+     * The walk the two tests around this one rely on must see through operations, or it would find every handle out of
+     * reach and pass anything. What an owner's own attunement spent is granted to Garden alone, yet the owner could make
+     * it in that transaction from its level, its MANA and its choice: through a select, ands, comparisons, an addition
+     * of a plaintext, a cast, multiplications with and without a plaintext, and a trivial encryption. A stranger could
+     * not. The owner makes no handle of its own here, which would hand it grants that cut the walk short.
+     */
+    function testTheWalkSeesThroughOperations() public {
+        vm.recordLogs();
+        ResealRecomputer owner = new ResealRecomputer();
+        uint256 tokenId = owner.forge{value: CHARGE}(garden);
+        _wait(1 days);
+        (externalEbool choice, bytes memory proof) = encryptBool(true, address(garden), address(owner));
+        owner.attune(garden, tokenId, choice, proof);
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+
+        // The attunement's last step on the MANA is `sub(credited, spent)`, read from the executor's event.
+        bytes32 mana = euint64.unwrap(garden.crystalOf(tokenId).mana);
+        bytes32 spent;
+        address executor = getCoprocessorConfig(address(garden)).CoprocessorAddress;
+        bytes32 fheSub = keccak256("FheSub(address,bytes32,bytes32,bytes1,bytes32)");
+        for (uint256 i; i < logs.length; i++) {
+            if (logs[i].emitter != executor || logs[i].topics.length == 0 || logs[i].topics[0] != fheSub) continue;
+            (, bytes32 rhs,, bytes32 result) = abi.decode(logs[i].data, (bytes32, bytes32, bytes1, bytes32));
+            if (result == mana) spent = rhs;
+        }
+        assertNotEq(spent, bytes32(0), "the spent MANA");
+        assertEq(plaintextOf(euint64.wrap(spent)), LEVEL_COST, "a rise");
+        IAcl acl = IAcl(getCoprocessorConfig(address(garden)).ACLAddress);
+        assertFalse(acl.isAllowed(spent, address(owner)), "granted to the owner");
+        assertTrue(_withinReach(logs, spent, address(owner)), "within the owner's reach");
+        assertFalse(_withinReach(logs, spent, stranger), "within a stranger's reach");
     }
 
     /// SEASON0.md §2.2, Handles, and §2.3, rule 5: GARDEN_ZERO, which every pot and every reseal start from, is granted
