@@ -6,6 +6,13 @@ import {TestFhevm} from "@fhevm/forge/TestFhevm.sol";
 import {Vm} from "forge-std/Vm.sol";
 import {Garden} from "../../src/Garden.sol";
 
+/// The ACL lets an account allowed on a handle allow another one, and says who is allowed, for now or for good.
+interface IAcl {
+    function allow(bytes32 handle, address account) external;
+    function isAllowed(bytes32 handle, address account) external view returns (bool);
+    function isAllowedForDecryption(bytes32 handle) external view returns (bool);
+}
+
 /**
  * @dev A Garden with the Season 0 parameters of RULES.md §12, two players and a stranger, and the checks the privacy
  *      tests share: who was granted what, and who cannot decrypt.
@@ -35,6 +42,8 @@ abstract contract GardenFixture is TestFhevm {
 
     /// The executor's event for a random value: the coprocessor draws it from this, and a test reads it back.
     bytes32 internal constant FHE_RAND = keccak256("FheRand(address,uint8,bytes16,bytes32)");
+    /// The executor's event for a bitwise or: both operands and the result.
+    bytes32 internal constant FHE_BIT_OR = keccak256("FheBitOr(address,bytes32,bytes32,bytes1,bytes32)");
     /// The ACL's events for a persistent grant, and for handles made publicly decryptable.
     bytes32 internal constant ACL_ALLOWED = keccak256("Allowed(address,address,bytes32)");
     bytes32 internal constant ACL_PUBLIC = keccak256("AllowedForDecryption(address,bytes32[])");
@@ -96,6 +105,12 @@ abstract contract GardenFixture is TestFhevm {
     function _shatter(address owner, uint256 tokenId) internal {
         vm.prank(owner);
         garden.shatter(tokenId);
+    }
+
+    /// The owner transfers the crystal (RULES.md §4, Ownership).
+    function _transfer(address owner, address to, uint256 tokenId) internal {
+        vm.prank(owner);
+        garden.transferFrom(owner, to, tokenId);
     }
 
     /// The owner attunes with a choice encrypted for Garden and the owner, as the owner's client would send it.

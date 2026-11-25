@@ -45,7 +45,7 @@ request ticks its task here.
 - [x] **T06 · Seasons.** The season index from deployment, wins and losses per season, the top three with
   tie-breaks, the close delay, `closeSeason` with encrypted shares, and the rollover.
   *Done when* the tests cover `RULES.md` §8.
-- [ ] **T07 · Transfers.** The lock check, and sealing the crystal again for its new owner.
+- [x] **T07 · Transfers.** The lock check, and sealing the crystal again for its new owner.
   *Done when* a test shows that the previous owner cannot decrypt the new level and MANA.
 - [ ] **T08 · Hardening.** Check the rules in `SEASON0.md` §2.3 one by one in the pull request, check the contract
   size, fill in the HCU table in §2.6, and have a subagent that has not seen the contract being written review it

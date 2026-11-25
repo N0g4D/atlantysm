@@ -199,8 +199,9 @@ contract ArenaTest is GardenFixture {
     }
 
     /// RULES.md §4 and SEASON0.md §5: a crystal waiting in an open lobby cannot be shattered or transferred, by its
-    /// owner or by an account the owner approved. Once its lobby is joined or cancelled, it can be shattered again.
-    /// It can still attune: RULES.md §4 locks only transfers and shattering, and the stake was put up already.
+    /// owner or by an account the owner approved. Once its lobby is joined or cancelled, it can be transferred and
+    /// shattered again. It can still attune: RULES.md §4 locks only transfers and shattering, and the stake was put up
+    /// already.
     function testAWaitingCrystalCannotBeShatteredOrTransferred() public {
         uint256 a = _forge(alice);
         uint256 b = _forge(bob);
@@ -226,7 +227,8 @@ contract ArenaTest is GardenFixture {
         assertEq(decrypt(garden.crystalOf(a).level, address(garden), aliceKey), 2, "a waiting crystal attunes");
 
         _join(lobbyId, b);
-        _shatter(alice, a);
+        _transfer(alice, bob, a);
+        _shatter(bob, a);
 
         lobbyId = _openLobby(c, STAKE);
         _wait(LOBBY_TIMEOUT);

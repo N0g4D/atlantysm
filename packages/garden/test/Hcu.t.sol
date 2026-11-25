@@ -133,6 +133,14 @@ contract HcuTest is GardenFixture {
         _assertWithinBudget("closeSeason", lastHCU(), 4_773_000, 1_728_000);
     }
 
+    /// A transfer seals the level and MANA again, whatever they hold, and credits nothing. `transferFrom` and both
+    /// `safeTransferFrom` run the same hook.
+    function testTransferringStaysUnderHalfOfEachCap() public {
+        resetHCU();
+        _transfer(alice, bob, crystal);
+        _assertWithinBudget("transfer", lastHCU(), 64_032, 34_000);
+    }
+
     /// Not an external function, but a transaction with FHE work: the constructor draws GARDEN_ZERO.
     function testDeployingStaysUnderHalfOfEachCap() public {
         resetHCU();

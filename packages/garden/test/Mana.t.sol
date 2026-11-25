@@ -146,6 +146,28 @@ contract ManaTest is GardenFixture {
         _assertNotPublic(mana);
     }
 
+    /// SEASON0.md §2.2, Transfer: a transfer seals the balance again without crediting it. What has accrued since
+    /// `lastAccrual` stays pending, remainder included, and goes with the crystal: its new owner is credited it at the
+    /// crystal's next action.
+    function testATransferLeavesTheAccrualPending() public {
+        uint256 tokenId = _forge(alice);
+        _wait(1 days);
+        harness.act(tokenId);
+        _wait(1 days + 500);
+        Garden.CrystalView memory before = garden.crystalOf(tokenId);
+
+        _transfer(alice, bob, tokenId);
+
+        Garden.CrystalView memory afterwards = garden.crystalOf(tokenId);
+        assertEq(afterwards.lastAccrual, before.lastAccrual, "nothing credited");
+        assertEq(afterwards.pendingMana, MANA_PER_DAY, "a day still pending");
+        assertEq(decrypt(afterwards.mana, address(garden), bobKey), MANA_PER_DAY, "the credited day, now Bob's");
+
+        _wait(SECONDS_PER_MANA - 500);
+        harness.act(tokenId);
+        assertEq(decrypt(garden.crystalOf(tokenId).mana, address(garden), bobKey), 2 * MANA_PER_DAY + 1, "all of it");
+    }
+
     /// Accrual stores the credit as it makes it, so a call that accrues twice, or reads the balance after accruing,
     /// still finds it.
     function testAccruingTwiceInOneCallKeepsTheCredit() public {
