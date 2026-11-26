@@ -42,6 +42,10 @@ bug fix.
 6. **Every outcome is verifiable.** Randomness is generated on-chain, and every published result carries a
    decryption proof that the contract checks.
 
+**What they rest on.** The game runs on Zama's protocol and trusts it. Its contracts decide who may decrypt, so
+whoever can upgrade them is trusted with the secrets too. While Zama pauses them, no crystal can act or be
+shattered, and the charges wait until it resumes. Invariants 1 and 4 hold as long as the protocol runs as it is.
+
 ## 4. Crystals
 
 **Forging.** Anyone can forge a crystal by paying the charge: **0.01 ETH** *(parameter)*, the same for everyone.
@@ -218,6 +222,7 @@ Sanctuary, the Arena and the seasonal ranking, with simulated MANA and charges i
 - The Monolith stakes the charges, and MANA becomes the real yield.
 - The ranking weakness in §8 is resolved.
 - A rule for unspent MANA when a crystal is shattered (likely paid out with the charge).
+- A way to get the charge back even while Zama's protocol is paused (§3).
 - A security audit, and a legal review before any real money is involved.
 
 **A possible dark path.** Putting the charge itself at stake breaks invariant 1. If it ever comes, it comes as a

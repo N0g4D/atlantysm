@@ -52,9 +52,9 @@ request ticks its task here.
   against the invariants in `RULES.md` §3.
   *Done when* every finding is fixed or recorded with a reason.
 - [ ] **T09 · Sepolia.** The deployment script, verification on Etherscan, and a scripted full round on Sepolia:
-  two crystals, an attunement, a lobby, a duel, its publication and a season closed. Use a deployment with a short
-  season for the round. Record the addresses and transaction hashes in `docs/season0-deployment.md`. Alessio
-  deploys, or gives the go-ahead.
+  two crystals, an attunement, a lobby, a duel, its publication, a transfer and a season closed. Use a deployment
+  with a short season for the round, and make the checks in `SEASON0.md` §6. Record the addresses and transaction
+  hashes in `docs/season0-deployment.md`. Alessio deploys, or gives the go-ahead.
 
 ## M2 — The app (by Sunday 6 December)
 
