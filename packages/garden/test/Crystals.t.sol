@@ -292,17 +292,16 @@ contract CrystalsTest is GardenFixture {
     }
 
     /// SEASON0.md §2.3, rule 6: `shatter` burns the crystal before the charge leaves, so an owner that reenters while
-    /// the charge is on its way cannot sell the crystal it is shattering, and leave its buyer a crystal that is about to
-    /// burn with its charge already gone. `nonReentrant` alone would not stop it: the reentry is a transfer.
+    /// the charge is on its way cannot sell the crystal it is shattering, and leave its buyer a crystal about to burn
+    /// with its charge already gone. `nonReentrant` alone would not stop it: the reentry is a transfer.
     function testACrystalCannotBeSoldWhileItIsShattered() public {
         ShatterSeller seller = new ShatterSeller{value: CHARGE}(garden, bob);
         uint256 tokenId = seller.forge();
 
         seller.shatter(tokenId);
 
-        assertEq(
-            seller.saleError(), abi.encodeWithSelector(IERC721Errors.ERC721NonexistentToken.selector, tokenId), "no sale"
-        );
+        bytes memory burned = abi.encodeWithSelector(IERC721Errors.ERC721NonexistentToken.selector, tokenId);
+        assertEq(seller.saleError(), burned, "no sale");
         assertEq(garden.balanceOf(bob), 0, "Bob holds nothing");
         assertEq(address(seller).balance, CHARGE, "the charge came back");
         assertEq(address(garden).balance, 0);
@@ -587,7 +586,9 @@ contract CrystalsTest is GardenFixture {
             // ZamaEthereumConfig.
             "confidentialProtocolId()"
         ];
-        string[] memory found = vm.parseJsonKeys(vm.readFile("out/Garden.sol/Garden.json"), ".methodIdentifiers");
+        // The artifact of the code deployed here, found by that code, so the list is checked against Garden itself.
+        string memory artifact = vm.readFile(vm.getArtifactPathByDeployedCode(address(garden).code));
+        string[] memory found = vm.parseJsonKeys(artifact, ".methodIdentifiers");
         assertEq(found.length, expected.length, "number of external functions");
         for (uint256 i; i < expected.length; i++) {
             bool listed;

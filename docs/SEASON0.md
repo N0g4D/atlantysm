@@ -28,12 +28,19 @@ simple to state and easy to check.
 - **ERC-721** comes from OpenZeppelin. Every function that sends ETH is `nonReentrant`.
 - **Configuration.** `Garden` inherits `ZamaEthereumConfig`, which supplies the FHEVM addresses for Sepolia and
   mainnet. Never hard-code a protocol address.
-- **What Garden trusts.** Zama's host contracts (the ACL, the FHE executor and the KMS verifier) are upgradeable, and
-  Zama can pause the ACL or put an address on its deny list. While the ACL is paused, or Garden is denied,
-  every call that computes on an encrypted value reverts: `forge`, `shatter`, `attune`, the Arena, `closeSeason` and
-  transfers. Only `publish` and approvals, which compute on nothing, still run, and no charge comes back until Zama
-  lifts it. A denied player blocks nothing: Garden can still grant to it. `RULES.md` §3 assumes the protocol runs
-  (T08's review, F2).
+- **What Garden trusts.** Zama's protocol: its host contracts on Sepolia (the ACL, the FHE executor, the input
+  verifier, the HCU limiter and the KMS verifier), all upgradeable proxies, and the coprocessors, the Gateway and the
+  threshold network behind them.
+  - Zama can pause the ACL or put an address on its deny list. While the ACL is paused, or Garden is denied, every call
+    that computes on an encrypted value reverts: `forge`, `shatter`, `attune`, the Arena, `closeSeason` and transfers.
+    Only `publish`, approvals and views, which compute on nothing, still run, and no charge comes back until Zama lifts
+    it. A denied player blocks nothing: Garden can still grant to it.
+  - Zama can lower the HCU caps. A close needs 4,773,000 per transaction and 1,728,000 deep, a join 2,045,096 and
+    906,000, a shatter 295,000 (§2.6).
+  - The ACL decides who may decrypt what, and the coprocessors and the Gateway carry its grants to the threshold
+    network, which holds the keys. Whoever can upgrade or run them is trusted with the secrets too.
+
+  `RULES.md` §3 assumes the protocol runs as it is (T08's review, F2).
 
 ### 2.1 State
 
@@ -538,10 +545,13 @@ costs 58,000 HCU, for `GARDEN_ZERO`.
   - `GARDEN_ZERO` is granted to Garden alone.
   - Fuzzed over random sequences, transfers included, read from the ACL: each live crystal's level and MANA are granted
     to its owner and to no other player, and its element to every player that has ever owned it. None of them is
-    publicly decryptable, and no pot is either, or granted to a player. The players publish and close, so a grant to
-    whoever does would show.
-  - Publishing grants nothing and makes nothing else public, whether the result counts for its season or only in the
-    records: the publisher may use none of the duel's handles.
+    publicly decryptable, and no stored pot is either, or granted to a player. The players publish and close, so a
+    lasting grant to whoever does would show.
+  - A grant for one transaction is enough to leak a handle: whoever holds it may allow it to anyone, for good. The
+    invariants run in a later transaction, so the tests check within the call's own: publishing grants nothing and
+    makes nothing else public, whether the result counts for its season or only in the records, and neither the
+    publisher, the shatterer, the attuner nor the closer may then use a pot or `GARDEN_ZERO`, nor the publisher any of
+    the duel's handles.
   - No event or revert differs between a rise, a refused rise and a hold, or between a duel whose stakes moved and
     one whose stakes stayed.
   - Closing a season grants each winner's new balance to its owner only, and nobody can decrypt a pot. A close looks

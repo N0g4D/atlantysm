@@ -211,8 +211,10 @@ contract PrivacyTest is GardenFixture {
 
     /// RULES.md §8 and §9: nobody can read the centre's total, not even the owner whose crystal filled it.
     /// Shattering grants only to the contract, the credited balance as accrual keeps it and then the pot, and makes
-    /// nothing publicly decryptable.
+    /// nothing publicly decryptable. The shatterer may use neither the pot nor GARDEN_ZERO, not even for the rest of
+    /// the transaction (`_assertMayUseNone`).
     function testNobodyCanDecryptTheCentre() public {
+        bytes32 zero = _redeployReadingItsZero();
         uint256 tokenId = _forge(alice);
         _wait(1 days);
 
@@ -229,6 +231,7 @@ contract PrivacyTest is GardenFixture {
         _assertCannotDecrypt(pot, alice, aliceKey);
         _assertCannotDecrypt(pot, stranger, strangerKey);
         _assertNotPublic(pot);
+        _assertMayUseNone(alice, _pair(euint64.unwrap(pot), zero), "the shatterer");
     }
 
     /// SEASON0.md §2.2, Handles: a shatterer holds the crystal's MANA handle, and can recompute in the same block
@@ -310,8 +313,9 @@ contract PrivacyTest is GardenFixture {
     /// SEASON0.md §2.2, Handles: an owner can recompute what attune computed, because it holds the crystal's handles
     /// and, until the transaction ends, the choice. A contract that owns a crystal can do it in the same transaction.
     /// It gets the crystal's new MANA, which it may read anyway, but not the centre: a season's first pot starts from
-    /// the contract's own zero.
+    /// the contract's own zero, which the attuner may not use either.
     function testAnAttunerCannotRecomputeTheCentre() public {
+        bytes32 zero = _redeployReadingItsZero();
         AttuneRecomputer recomputer = new AttuneRecomputer();
         uint256 tokenId = recomputer.forge{value: CHARGE}(garden);
         _wait(1 days);
@@ -325,6 +329,7 @@ contract PrivacyTest is GardenFixture {
         // one: the choice, and every handle it computed, the cost of the rise among them. The pot is none of them.
         IAcl acl = IAcl(getCoprocessorConfig(address(garden)).ACLAddress);
         assertFalse(acl.isAllowed(euint64.unwrap(pot), address(recomputer)), "the attacker may use the pot");
+        assertFalse(acl.isAllowed(zero, address(recomputer)), "the attacker may use GARDEN_ZERO");
         assertEq(plaintextOf(recomputed), LEVEL_COST, "the cost of the rise");
         assertEq(plaintextOf(pot), LEVEL_COST, "the same value");
         assertNotEq(euint64.unwrap(recomputed), euint64.unwrap(pot), "another handle");
@@ -534,6 +539,7 @@ contract PrivacyTest is GardenFixture {
      * transaction, which a forge test still is: both crystals', the outcome, what the creator put up, and the centre.
      */
     function testPublishingGrantsNothingAndRevealsNothing() public {
+        bytes32 zero = _redeployReadingItsZero();
         uint256[4] memory crystals = [_forge(alice), _forge(bob), _forge(alice), _forge(bob)];
         _wait(1 days);
         // A rise puts MANA in season 1's centre, so that its pot has a handle to check.
@@ -545,9 +551,9 @@ contract PrivacyTest is GardenFixture {
         uint256 countedLobby = _openLobby(crystals[0], 40);
         uint256 counted = _join(countedLobby, crystals[1]);
 
-        _assertPublishingGrantsNothing(counted, countedLobby, "a result that counts");
+        _assertPublishingGrantsNothing(counted, countedLobby, zero, "a result that counts");
         assertTrue(_top(2)[0] != 0, "the result counted for season 2");
-        _assertPublishingGrantsNothing(late, lateLobby, "a result in the records only");
+        _assertPublishingGrantsNothing(late, lateLobby, zero, "a result in the records only");
         assertEq(_top(1)[0], 0, "season 1's ranking did not move");
     }
 
@@ -559,8 +565,11 @@ contract PrivacyTest is GardenFixture {
      * contract, as accrual keeps it, each new balance to the contract and its own owner, and the new pot of the season in
      * progress to the contract alone. Nothing becomes publicly decryptable. Each winner reads its own balance; the other
      * winners' owners and a stranger read none, and nobody reads the centre, neither the closed one nor the new one.
+     * Neither the stranger, who closes, nor a winner may use either pot or GARDEN_ZERO, not even for the rest of the
+     * transaction (`_assertMayUseNone`).
      */
     function testClosingASeasonGrantsEachShareToItsWinnerOnly() public {
+        bytes32 zero = _redeployReadingItsZero();
         // Forging, fighting and closing in one forge test, which is one transaction, would hit the HCU caps that
         // Hcu.t.sol measures each call against.
         disableHCULimits();
@@ -608,6 +617,13 @@ contract PrivacyTest is GardenFixture {
         _assertCannotDecrypt(newPot, stranger, strangerKey);
         _assertNotPublic(closedPot);
         _assertNotPublic(newPot);
+
+        bytes32[] memory centre = new bytes32[](3);
+        (centre[0], centre[1], centre[2]) = (euint64.unwrap(closedPot), euint64.unwrap(newPot), zero);
+        _assertMayUseNone(stranger, centre, "the closer");
+        for (uint256 place; place < 3; place++) {
+            _assertMayUseNone(owners[place], centre, "a winner");
+        }
     }
 
     /**
@@ -858,9 +874,11 @@ contract PrivacyTest is GardenFixture {
         assertEq(draws, 1, "one random value");
     }
 
-    /// The stranger publishes the duel fought in the lobby: no persistent grant, nothing made public, and no handle of
-    /// the duel's that the stranger may use, persistently or for the transaction.
-    function _assertPublishingGrantsNothing(uint256 duelId, uint256 lobbyId, string memory label) internal {
+    /// The stranger publishes the duel fought in the lobby: no persistent grant, nothing made public, and none of the
+    /// duel's handles, nor GARDEN_ZERO, that the stranger may use, persistently or for the transaction.
+    function _assertPublishingGrantsNothing(uint256 duelId, uint256 lobbyId, bytes32 zero, string memory label)
+        internal
+    {
         (bool creatorWon, bytes memory proof) = decryptPublicWithSignatures(garden.duelOf(duelId).creatorWins);
         vm.recordLogs();
         vm.prank(stranger);
@@ -872,22 +890,48 @@ contract PrivacyTest is GardenFixture {
         Garden.Duel memory duel = garden.duelOf(duelId);
         Garden.CrystalView memory a = garden.crystalOf(duel.creatorCrystal);
         Garden.CrystalView memory b = garden.crystalOf(duel.challengerCrystal);
-        bytes32[9] memory handles = [
-            euint8.unwrap(a.element),
-            euint8.unwrap(a.level),
-            euint64.unwrap(a.mana),
-            euint8.unwrap(b.element),
-            euint8.unwrap(b.level),
-            euint64.unwrap(b.mana),
-            ebool.unwrap(duel.creatorWins),
-            ebool.unwrap(garden.lobbyOf(lobbyId).creatorPaid),
-            euint64.unwrap(garden.potOf(duel.season))
-        ];
+        bytes32[] memory handles = new bytes32[](10);
+        handles[0] = euint8.unwrap(a.element);
+        handles[1] = euint8.unwrap(a.level);
+        handles[2] = euint64.unwrap(a.mana);
+        handles[3] = euint8.unwrap(b.element);
+        handles[4] = euint8.unwrap(b.level);
+        handles[5] = euint64.unwrap(b.mana);
+        handles[6] = ebool.unwrap(duel.creatorWins);
+        handles[7] = ebool.unwrap(garden.lobbyOf(lobbyId).creatorPaid);
+        handles[8] = euint64.unwrap(garden.potOf(duel.season));
+        handles[9] = zero;
+        _assertMayUseNone(stranger, handles, string.concat(label, ": the publisher"));
+    }
+
+    /**
+     * @dev `account` may use none of `handles`, which skips empty ones: not for good, and not for the rest of the
+     *      transaction, which a forge test still is. A grant that lasts only that long is enough: the ACL lets whoever
+     *      may use a handle allow it to anyone, so a contract of the account's could make it its own for good.
+     */
+    function _assertMayUseNone(address account, bytes32[] memory handles, string memory label) internal view {
         IAcl acl = IAcl(getCoprocessorConfig(address(garden)).ACLAddress);
         for (uint256 i; i < handles.length; i++) {
             if (handles[i] == 0) continue;
-            assertFalse(acl.isAllowed(handles[i], stranger), string.concat(label, ": the publisher may use a handle"));
+            assertFalse(acl.isAllowed(handles[i], account), string.concat(label, " may use a handle"));
         }
+    }
+
+    function _pair(bytes32 a, bytes32 b) internal pure returns (bytes32[] memory handles) {
+        handles = new bytes32[](2);
+        (handles[0], handles[1]) = (a, b);
+    }
+
+    /**
+     * @dev Deploys Garden again, recording the deployment, and returns its GARDEN_ZERO: the one handle a deployment
+     *      grants (`testOnlyGardenHoldsItsZero`). The tests that call it run on this Garden.
+     */
+    function _redeployReadingItsZero() internal returns (bytes32) {
+        vm.recordLogs();
+        garden = new Garden(_seasonZero());
+        bytes32[] memory granted = _assertGrantsOnlyTo(vm.getRecordedLogs(), address(garden));
+        assertEq(granted.length, 1, "one grant, of GARDEN_ZERO");
+        return granted[0];
     }
 
     /// A grant to the contract of a credited balance, as accrual keeps it: no longer stored, so checked by its value.
