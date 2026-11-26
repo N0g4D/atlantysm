@@ -55,6 +55,35 @@ contract Reenterer {
     }
 }
 
+/// An owner that tries to sell the crystal it is shattering, to `buyer`, while the charge is on its way back.
+contract ShatterSeller {
+    Garden internal immutable garden;
+    address internal immutable buyer;
+    uint256 internal shattering;
+    bytes public saleError;
+
+    constructor(Garden garden_, address buyer_) payable {
+        garden = garden_;
+        buyer = buyer_;
+    }
+
+    function forge() external returns (uint256) {
+        return garden.forge{value: garden.CHARGE()}();
+    }
+
+    function shatter(uint256 tokenId) external {
+        shattering = tokenId;
+        garden.shatter(tokenId);
+    }
+
+    receive() external payable {
+        try garden.transferFrom(address(this), buyer, shattering) {}
+        catch (bytes memory reason) {
+            saleError = reason;
+        }
+    }
+}
+
 /// A contract that takes crystals by `safeTransferFrom`, and notes whether, when called, it may already use the
 /// crystal's level and MANA.
 contract CrystalReceiver is ZamaEthereumConfig, IERC721Receiver {
@@ -260,6 +289,22 @@ contract CrystalsTest is GardenFixture {
         assertEq(garden.ownerOf(first + 1), address(reenterer), "the second crystal is whole");
         assertEq(address(garden).balance, CHARGE);
         assertEq(address(reenterer).balance, CHARGE);
+    }
+
+    /// SEASON0.md §2.3, rule 6: `shatter` burns the crystal before the charge leaves, so an owner that reenters while
+    /// the charge is on its way cannot sell the crystal it is shattering, and leave its buyer a crystal about to burn
+    /// with its charge already gone. `nonReentrant` alone would not stop it: the reentry is a transfer.
+    function testACrystalCannotBeSoldWhileItIsShattered() public {
+        ShatterSeller seller = new ShatterSeller{value: CHARGE}(garden, bob);
+        uint256 tokenId = seller.forge();
+
+        seller.shatter(tokenId);
+
+        bytes memory burned = abi.encodeWithSelector(IERC721Errors.ERC721NonexistentToken.selector, tokenId);
+        assertEq(seller.saleError(), burned, "no sale");
+        assertEq(garden.balanceOf(bob), 0, "Bob holds nothing");
+        assertEq(address(seller).balance, CHARGE, "the charge came back");
+        assertEq(address(garden).balance, 0);
     }
 
     // -- Ownership ------------------------------------------------------------------------------------------
@@ -473,6 +518,114 @@ contract CrystalsTest is GardenFixture {
         assertEq(garden.THIRD_SHARE(), THIRD_SHARE);
         assertEq(garden.GENESIS(), block.timestamp);
         assertEq(garden.currentSeason(), 1);
+    }
+
+    /**
+     * RULES.md §3, invariant 4, and SEASON0.md §2 and §2.4: Garden's external functions are exactly these. The game's
+     * eight actions, ERC-721's own functions, views, the parameters, and the protocol id of Zama's configuration. None
+     * is an admin function, a setter, a pause or an upgrade. Read from the build's artifact, so a function added by
+     * mistake, or brought in by a new base contract, fails here until this list and §2.4 follow it. A call that
+     * matches none of them reverts with nothing: Garden has no fallback.
+     */
+    function testGardenHasNoOtherFunction() public {
+        string[51] memory expected = [
+            // The game (SEASON0.md §2.4).
+            "forge()",
+            "shatter(uint256)",
+            "attune(uint256,bytes32,bytes)",
+            "openLobby(uint256,uint64)",
+            "cancelLobby(uint256)",
+            "joinLobby(uint256,uint256)",
+            "publish(uint256,bool,bytes)",
+            "closeSeason(uint256)",
+            // ERC-721 and ERC-165, from OpenZeppelin.
+            "name()",
+            "symbol()",
+            "tokenURI(uint256)",
+            "balanceOf(address)",
+            "ownerOf(uint256)",
+            "approve(address,uint256)",
+            "getApproved(uint256)",
+            "setApprovalForAll(address,bool)",
+            "isApprovedForAll(address,address)",
+            "transferFrom(address,address,uint256)",
+            "safeTransferFrom(address,address,uint256)",
+            "safeTransferFrom(address,address,uint256,bytes)",
+            "supportsInterface(bytes4)",
+            // Views.
+            "crystalOf(uint256)",
+            "crystalsOf(address,uint256,uint256)",
+            "recordOf(uint256)",
+            "lobbyOf(uint256)",
+            "duelOf(uint256)",
+            "openLobbies(uint256,uint256)",
+            "pendingDuels(uint256,uint256)",
+            "currentSeason()",
+            "potOf(uint256)",
+            "rankingOf(uint256)",
+            "scoreOf(uint256,uint256)",
+            "totalSupply()",
+            "lastTokenId()",
+            "lastLobbyId()",
+            "lastDuelId()",
+            // The parameters, fixed at deployment.
+            "CHARGE()",
+            "MANA_PER_DAY()",
+            "SECONDS_PER_MANA()",
+            "SEASON_LENGTH()",
+            "LEVEL_COST()",
+            "MAX_LEVEL()",
+            "MIN_STAKE()",
+            "MAX_STAKE()",
+            "LOBBY_TIMEOUT()",
+            "SEASON_CLOSE_DELAY()",
+            "FIRST_SHARE()",
+            "SECOND_SHARE()",
+            "THIRD_SHARE()",
+            "GENESIS()",
+            // ZamaEthereumConfig.
+            "confidentialProtocolId()"
+        ];
+        // The artifact of the code deployed here, found by that code, so the list is checked against Garden itself.
+        string memory artifact = vm.readFile(vm.getArtifactPathByDeployedCode(address(garden).code));
+        string[] memory found = vm.parseJsonKeys(artifact, ".methodIdentifiers");
+        assertEq(found.length, expected.length, "number of external functions");
+        for (uint256 i; i < expected.length; i++) {
+            bool listed;
+            for (uint256 j; j < found.length && !listed; j++) {
+                listed = keccak256(bytes(found[j])) == keccak256(bytes(expected[i]));
+            }
+            assertTrue(listed, string.concat("missing: ", expected[i]));
+        }
+
+        (bool ok, bytes memory returned) = address(garden).call(abi.encodeWithSignature("setOwner(address)", alice));
+        assertFalse(ok, "a call no function matches");
+        assertEq(returned.length, 0, "reverts with nothing");
+    }
+
+    /**
+     * RULES.md §3, invariant 4: no code but Garden's own can ever run as Garden, and Garden can never be destroyed. Its
+     * runtime code holds no DELEGATECALL, CALLCODE or SELFDESTRUCT. Read opcode by opcode, skipping the bytes each PUSH
+     * carries, the immutables among them, and the compiler's metadata at the end, which is data. The walk must see the
+     * CALLs Garden does make, to the FHE executor, the ACL and the owner of a shattered crystal, or it would pass
+     * anything.
+     */
+    function testGardenCanNeverRunOtherCodeOrBeDestroyed() public view {
+        bytes memory code = address(garden).code;
+        // The metadata ends with its own length, in two bytes.
+        uint256 metadata = uint256(uint8(code[code.length - 2])) << 8 | uint8(code[code.length - 1]);
+        assertLt(metadata + 2, code.length, "the metadata's length");
+        uint256 calls;
+        uint256 forbidden;
+        for (uint256 i; i < code.length - 2 - metadata; i++) {
+            uint8 op = uint8(code[i]);
+            if (op == 0xf1) calls++;
+            if (op == 0xf4 || op == 0xf2 || op == 0xff) forbidden++;
+            // PUSH1 to PUSH32 carry 1 to 32 bytes of data, which are not opcodes.
+            if (op >= 0x60 && op <= 0x7f) i += op - 0x5f;
+        }
+        assertGt(calls, 0, "the walk sees Garden's CALLs");
+        assertEq(forbidden, 0, "DELEGATECALL, CALLCODE or SELFDESTRUCT");
     }
 
     /// The constructor refuses parameters the rules cannot run on. Accrual needs a day to divide into whole MANA

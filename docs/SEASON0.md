@@ -28,6 +28,19 @@ simple to state and easy to check.
 - **ERC-721** comes from OpenZeppelin. Every function that sends ETH is `nonReentrant`.
 - **Configuration.** `Garden` inherits `ZamaEthereumConfig`, which supplies the FHEVM addresses for Sepolia and
   mainnet. Never hard-code a protocol address.
+- **What Garden trusts.** Zama's protocol: its host contracts on Sepolia (the ACL, the FHE executor, the input
+  verifier, the HCU limiter and the KMS verifier), all upgradeable proxies, and the coprocessors, the Gateway and the
+  threshold network behind them.
+  - Zama can pause the ACL or put an address on its deny list. While the ACL is paused, or Garden is denied, every call
+    that computes on an encrypted value reverts: `forge`, `shatter`, `attune`, the Arena, `closeSeason` and transfers.
+    Only `publish`, approvals and views, which compute on nothing, still run, and no charge comes back until Zama lifts
+    it. A denied player blocks nothing: Garden can still grant to it.
+  - Zama can lower the HCU caps. A close needs 4,773,000 per transaction and 1,728,000 deep, a join 2,045,096 and
+    906,000, a shatter 295,000 (§2.6).
+  - The ACL decides who may decrypt what, and the coprocessors and the Gateway carry its grants to the threshold
+    network, which holds the keys. Whoever can upgrade or run them is trusted with the secrets too.
+
+  `RULES.md` §3 assumes the protocol runs as it is (T08's review, F2).
 
 ### 2.1 State
 
@@ -412,10 +425,11 @@ change that costs more or less fails until the table follows.
 | `joinLobby` | 2,045,096 | 906,000 |
 | `publish` | 0 | 0 |
 | `closeSeason` | 4,773,000 | 1,728,000 |
-| transfer | 64,032 | 34,000 |
+| `transferFrom`, both `safeTransferFrom` | 64,032 | 34,000 |
+| `approve`, `setApprovalForAll` | 0 | 0 |
 
-Every function is measured on `Garden` (`packages/garden/test/Hcu.t.sol`). Deploying costs 58,000 HCU, for
-`GARDEN_ZERO`.
+Every external function that can change state is measured on `Garden` (`packages/garden/test/Hcu.t.sol`). Deploying
+costs 58,000 HCU, for `GARDEN_ZERO`.
 - **`forge`.** Most of it is the element: `randEuint16` costs 23,000, the scalar `rem` on `euint16` 580,000, and
   the cast to `euint8` 32. The zero for the level and MANA is the scalar `and` and `or` on `euint16` (61,000
   together) plus two casts of 32. It runs beside the `rem`, so it adds nothing to the depth.
@@ -463,19 +477,23 @@ Every function is measured on `Garden` (`packages/garden/test/Hcu.t.sol`). Deplo
     (Zama's changelog). The close keeps to long-supported operations, so that it works on Sepolia.
 - **Transfer.** The reseal: for the level, the cast of `GARDEN_ZERO` to `euint8` (32) and the `or` on `euint8`
   (30,000); beside it, for the MANA, the `or` on `euint64` (34,000), which is the depth. `transferFrom` and both
-  `safeTransferFrom` run the same hook, and what the crystal holds changes nothing.
+  `safeTransferFrom` run the same hook, and `Hcu.t.sol` measures all three: the receiver's check comes after the hook
+  and runs no encrypted operation. What the crystal holds changes nothing.
   - With `add`, as §2.2 first had it, the same reseal would cost 250,032 at a depth of 162,000: 88,000 on `euint8` and
     162,000 on `euint64`.
   - Accruing first would add a scalar `add` (133,000) to the MANA's chain, and change nothing anyone can read.
   - A transaction can hold 312 transfers. A crystal passed from hand to hand within one transaction deepens its chain by
     34,000 at each transfer.
+- **Approvals.** `approve` and `setApprovalForAll` change no encrypted value, so they cost no HCU. The account they
+  approve is granted nothing until it moves the crystal to itself (`RULES.md` §4).
 
 ## 3. Toolchain
 
 - **Solidity:** solc 0.8.24, EVM `cancun`, the optimizer on at 200 runs; Foundry 1.7.1, pinned in CI.
-  - Every FHE call inlines its checks. At T07, `Garden` is 19,506 bytes with the optimizer, of the 24,576 allowed, so
-    5,070 are left. Without the optimizer it would be 32,155 and could not be deployed, so the optimizer is not
-    optional. At T06 the two figures were 19,262 and 31,805, at T05 16,662 and 27,824, and at T04 11,442 and 19,632.
+  - Every FHE call inlines its checks. At T08, as at T07, `Garden` is 19,506 bytes with the optimizer, of the 24,576
+    allowed, so 5,070 are left; its initcode is 23,298 of 49,152. Without the optimizer it would be 32,155 and could not
+    be deployed, so the optimizer is not optional. At T06 the two figures were 19,262 and 31,805, at T05 16,662 and
+    27,824, and at T04 11,442 and 19,632.
   - Verification on Etherscan (T09) must use the same settings.
 - **Contract packages:** `@fhevm/solidity` ^0.13.4, `encrypted-types` ^0.0.4 (which `FHE.sol` imports, so every
   contract needs it to compile) and `@openzeppelin/contracts` ^5.
@@ -526,18 +544,30 @@ Every function is measured on `Garden` (`packages/garden/test/Hcu.t.sol`). Deplo
     back through the executor's events, the new handles descend from a handle she can neither use nor make again.
   - `GARDEN_ZERO` is granted to Garden alone.
   - Fuzzed over random sequences, transfers included, read from the ACL: each live crystal's level and MANA are granted
-    to its owner and to no other player, and its element to every player that has ever owned it.
+    to its owner and to no other player, and its element to every player that has ever owned it. None of them is
+    publicly decryptable, and no stored pot is either, or granted to a player. The players publish and close, so a
+    lasting grant to whoever does would show.
+  - A grant for one transaction is enough to leak a handle: whoever holds it may allow it to anyone, for good. The
+    invariants run in a later transaction, so the tests check within the call's own: publishing grants nothing and
+    makes nothing else public, whether the result counts for its season or only in the records, and neither the
+    publisher, the shatterer, the attuner nor the closer may then use a pot or `GARDEN_ZERO`, nor the publisher any of
+    the duel's handles.
   - No event or revert differs between a rise, a refused rise and a hold, or between a duel whose stakes moved and
     one whose stakes stayed.
   - Closing a season grants each winner's new balance to its owner only, and nobody can decrypt a pot. A close looks
     the same from outside whatever the pot holds.
 - **Adversarial.** A forged outcome, a replayed proof and a second publish are rejected. A season cannot be
   closed early or twice. A crystal waiting in a lobby cannot be transferred, shattered or entered twice. A stake
-  below or above its bounds is rejected.
+  below or above its bounds is rejected. An owner that reenters while a charge comes back can neither shatter again
+  nor sell the crystal it is shattering, which is burned before the charge leaves.
 - **Ranking.** The same duels give the same top three whatever order their results are published in, and after each
   result the top three are exact for the results counted so far.
 - **Conservation**, fuzzed: the ETH balance equals `CHARGE ×` live crystals, and the MANA in crystals and pots
   equals the MANA accrued, read with `plaintextOf`.
+- **Nobody can change Garden** (`RULES.md` §3, invariant 4). Its external functions, read from the build's artifact, are
+  exactly the game's of §2.4, its views and parameters, ERC-721's, and `confidentialProtocolId()` from
+  `ZamaEthereumConfig`. Its runtime code holds no `DELEGATECALL`, `CALLCODE` or `SELFDESTRUCT`. A new function fails the
+  test until the list and §2.4 follow it.
 - **Mocks are not production.** The test stack computes in cleartext; T09 plays a full round on Sepolia.
 
 ## 6. Deployment
@@ -545,6 +575,14 @@ Every function is measured on `Garden` (`packages/garden/test/Hcu.t.sol`). Deplo
 - A Forge script deploys `Garden` to Sepolia with the Season 0 parameters and verifies the source on Etherscan.
   The addresses and the transactions of the full round go in `docs/season0-deployment.md`.
 - Alessio deploys, or gives an explicit go-ahead. Private keys never enter the repository.
+- **What the tests cannot show** (T08's review, F5). The HCU in §2.6 comes from the test stack's own host contracts
+  (`@fhevm/forge` 0.13.1: FHEVMExecutor v0.5.0, HCULimit v0.3.0, ACL v0.4.0). On Sepolia, T09 checks:
+  - the versions the host contracts report (`getVersion()`);
+  - the per-block HCU cap that every application outside its whitelist shares (`getGlobalHCUCapPerBlock()`,
+    `isBlockHCUWhitelisted`). Zama's test library says the deployed hosts set it at its ceiling. A lower cap could make
+    a join or a close fail in a busy block, but never `publish`, which costs no HCU;
+  - a transfer in the scripted round, so that the reseal, the cast of `GARDEN_ZERO` and the `or`, runs on the real
+    coprocessor at least once.
 
 ## 7. Before mainnet (not in Season 0)
 

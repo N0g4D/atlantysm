@@ -218,10 +218,12 @@ contract Garden is ZamaEthereumConfig, ERC721, ReentrancyGuardTransient {
         // maximum, so a wrap at the maximum itself would do no harm, but exact values are simpler to check.
         bool levels = params.maxLevel >= 2 && params.maxLevel <= 15 && params.levelCost != 0
             && uint256(params.levelCost) * params.maxLevel * params.maxLevel <= type(uint64).max;
-        // A stake is never symbolic (RULES.md §7), and the bounds must leave a stake to choose. A duel's winner takes
-        // both stakes, encrypted from the public 2 × stake, which must fit in 64 bits. A crystal waiting in a lobby that
-        // nobody joins cannot be shattered before the timeout, so the timeout may not outlast a season: the charge must
-        // come back within reach (RULES.md §3, invariant 1).
+        // A stake is never nothing, and the bounds must leave a stake to choose. RULES.md §7 puts them at a tenth of a
+        // day's MANA and a whole day's, so that a stake is never symbolic: that is the deployment's choice of values
+        // (§12), and nothing here depends on it. A duel's winner takes both stakes, encrypted from the public
+        // 2 × stake, which must fit in 64 bits. A crystal waiting in a lobby that nobody joins cannot be shattered
+        // before the timeout, so the timeout may not outlast a season: the charge must come back within reach
+        // (RULES.md §3, invariant 1).
         bool arena = params.minStake != 0 && params.minStake <= params.maxStake
             && params.maxStake <= type(uint64).max / 2 && params.lobbyTimeout <= params.seasonLength;
         // The centre goes to the top three in full (RULES.md §8), so the shares add up to 100, and what a closed season
