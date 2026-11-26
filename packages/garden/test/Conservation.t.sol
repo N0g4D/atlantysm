@@ -256,8 +256,9 @@ contract GardenHandler is CommonBase, StdUtils {
         duels++;
     }
 
-    /// RULES.md §7 and §8: anyone publishes, here an outsider, and the result the model expects counts in both records,
-    /// and in the season the duel was fought in if it comes within the close delay of that season's end.
+    /// RULES.md §7 and §8: anyone publishes, and the result the model expects counts in both records, and in the season
+    /// the duel was fought in if it comes within the close delay of that season's end. Here a player publishes, picked by
+    /// the seed's high bits, so that the privacy invariant would see anything publishing granted it.
     function publish(uint256 duelSeed) external {
         if (pendingDuels.length == 0) return;
         uint256 index = bound(duelSeed, 0, pendingDuels.length - 1);
@@ -265,7 +266,7 @@ contract GardenHandler is CommonBase, StdUtils {
         pendingDuels[index] = pendingDuels[pendingDuels.length - 1];
         pendingDuels.pop();
         (bool creatorWon, bytes memory proof) = fixture.outcomeWithProof(duelId);
-        vm.prank(address(0xBEEF));
+        vm.prank(actors[bound(duelSeed >> 128, 0, actors.length - 1)]);
         garden.publish(duelId, creatorWon, proof);
 
         Garden.Duel memory duel = garden.duelOf(duelId);
@@ -292,7 +293,8 @@ contract GardenHandler is CommonBase, StdUtils {
     /**
      * @notice RULES.md §8: anyone closes a season from an hour after it ends, here the first season the seed finds that
      *         may be closed. Its centre goes 50%, 30% and 20%, rounded down, to each of its top three that still exists,
-     *         and the rest to the season in progress.
+     *         and the rest to the season in progress. A player closes it, picked by the seed's high bits, so that the
+     *         privacy invariant would see anything closing granted it.
      */
     function closeSeason(uint256 seasonSeed) external {
         uint256 current = _season();
@@ -306,7 +308,7 @@ contract GardenHandler is CommonBase, StdUtils {
             }
         }
         if (season == 0) return;
-        vm.prank(address(0xC1053));
+        vm.prank(actors[bound(seasonSeed >> 128, 0, actors.length - 1)]);
         garden.closeSeason(season);
 
         closed[season] = true;
@@ -444,8 +446,9 @@ contract ConservationTest is GardenFixture {
 
     function setUp() public override {
         super.setUp();
-        // Many handler calls share a block, and the per-block HCU cap would bind on the scaffolding. Hcu.t.sol
-        // measures each function against the real caps.
+        // Each handler call of a random run is a transaction of its own, but each known sequence below is one forge
+        // test, so one transaction, and the season sequence would outgrow the per-transaction HCU cap that many
+        // transactions on chain would share. Hcu.t.sol measures each function against the real caps.
         disableHCULimits();
 
         address[] memory actors = new address[](3);
@@ -554,10 +557,12 @@ contract ConservationTest is GardenFixture {
         }
     }
 
-    /// RULES.md §3, invariant 3, §4 and §9, and SEASON0.md §2.3, rule 5: whatever the sequence of calls, each live
+    /// RULES.md §3, invariant 3, §4 and §9, and SEASON0.md §2.3, rules 4 and 5: whatever the sequence of calls, each live
     /// crystal's level and MANA are granted to its owner and to no other player, and its element to every player that
     /// has ever owned it and to no other. Read from the ACL. A transfer leaves the previous owners on the element, which
-    /// they knew, and on nothing else.
+    /// they knew, and on nothing else. None of these handles is publicly decryptable, and no pot is either, or granted
+    /// to a player, whoever has published and closed: the players do both in the handler. A closed season's pot has
+    /// been emptied, so this cannot see it; `testClosingASeasonGrantsEachShareToItsWinnerOnly` does.
     /// forge-config: default.invariant.runs = 64
     /// forge-config: default.invariant.depth = 64
     /// forge-config: default.invariant.fail-on-revert = true
@@ -576,6 +581,17 @@ contract ConservationTest is GardenFixture {
                     handler.everOwned(live[i], players[j]),
                     "the element"
                 );
+            }
+            assertFalse(acl.isAllowedForDecryption(euint8.unwrap(crystal.element)), "a public element");
+            assertFalse(acl.isAllowedForDecryption(euint8.unwrap(crystal.level)), "a public level");
+            assertFalse(acl.isAllowedForDecryption(euint64.unwrap(crystal.mana)), "a public balance");
+        }
+        for (uint256 season = 1; season <= garden.currentSeason(); season++) {
+            bytes32 pot = euint64.unwrap(garden.potOf(season));
+            if (pot == 0) continue;
+            assertFalse(acl.isAllowedForDecryption(pot), "a public pot");
+            for (uint256 j; j < players.length; j++) {
+                assertFalse(acl.isAllowed(pot, players[j]), "a player may use a pot");
             }
         }
     }
@@ -608,8 +624,8 @@ contract ConservationTest is GardenFixture {
 
     /// The same for the Arena: a duel whose stakes move, one where only the creator covers the stake, one where neither
     /// does, one where only the challenger does, a cancel that gives the stake back and one with nothing to give back,
-    /// and a duel published after one of its crystals was shattered. Each crystal is picked by its index among the live ones, in forging order until the
-    /// shatter.
+    /// and a duel published after one of its crystals was shattered. Each crystal is picked by its index among the live
+    /// ones, in forging order until the shatter.
     function testTheInvariantsHoldOnAKnownArenaSequence() public {
         handler.forge(0);
         handler.forge(1);

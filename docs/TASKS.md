@@ -47,7 +47,7 @@ request ticks its task here.
   *Done when* the tests cover `RULES.md` §8.
 - [x] **T07 · Transfers.** The lock check, and sealing the crystal again for its new owner.
   *Done when* a test shows that the previous owner cannot decrypt the new level and MANA.
-- [ ] **T08 · Hardening.** Check the rules in `SEASON0.md` §2.3 one by one in the pull request, check the contract
+- [x] **T08 · Hardening.** Check the rules in `SEASON0.md` §2.3 one by one in the pull request, check the contract
   size, fill in the HCU table in §2.6, and have a subagent that has not seen the contract being written review it
   against the invariants in `RULES.md` §3.
   *Done when* every finding is fixed or recorded with a reason.

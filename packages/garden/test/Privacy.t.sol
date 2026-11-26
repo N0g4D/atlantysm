@@ -526,6 +526,31 @@ contract PrivacyTest is GardenFixture {
         snoop.negate(outcome);
     }
 
+    /**
+     * RULES.md §3, invariant 3, and SEASON0.md §2.3, rules 4 and 5: publishing a duel grants nothing and makes nothing
+     * else public. Anyone can publish, so a grant here would hand secrets to whoever asks. Read from the ACL's events,
+     * a result that counts for its season, which ranks the winner, and one that counts only in the records each grant
+     * nothing and reveal nothing. Then the publisher may use none of the duel's handles, not even for the rest of the
+     * transaction, which a forge test still is: both crystals', the outcome, what the creator put up, and the centre.
+     */
+    function testPublishingGrantsNothingAndRevealsNothing() public {
+        uint256[4] memory crystals = [_forge(alice), _forge(bob), _forge(alice), _forge(bob)];
+        _wait(1 days);
+        // A rise puts MANA in season 1's centre, so that its pot has a handle to check.
+        _attune(alice, crystals[2], true);
+        uint256 lateLobby = _openLobby(crystals[2], 40);
+        uint256 late = _join(lateLobby, crystals[3]);
+        // Season 1 can be closed now, so its duel counts only in the records. The next one counts for season 2.
+        _waitUntilClosable(1);
+        uint256 countedLobby = _openLobby(crystals[0], 40);
+        uint256 counted = _join(countedLobby, crystals[1]);
+
+        _assertPublishingGrantsNothing(counted, countedLobby, "a result that counts");
+        assertTrue(_top(2)[0] != 0, "the result counted for season 2");
+        _assertPublishingGrantsNothing(late, lateLobby, "a result in the records only");
+        assertEq(_top(1)[0], 0, "season 1's ranking did not move");
+    }
+
     // -- Seasons --------------------------------------------------------------------------------------------------
 
     /**
@@ -831,6 +856,38 @@ contract PrivacyTest is GardenFixture {
             }
         }
         assertEq(draws, 1, "one random value");
+    }
+
+    /// The stranger publishes the duel fought in the lobby: no persistent grant, nothing made public, and no handle of
+    /// the duel's that the stranger may use, persistently or for the transaction.
+    function _assertPublishingGrantsNothing(uint256 duelId, uint256 lobbyId, string memory label) internal {
+        (bool creatorWon, bytes memory proof) = decryptPublicWithSignatures(garden.duelOf(duelId).creatorWins);
+        vm.recordLogs();
+        vm.prank(stranger);
+        garden.publish(duelId, creatorWon, proof);
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        assertEq(_grantsIn(logs).length, 0, string.concat(label, ": a grant"));
+        _assertNothingPublic(logs);
+
+        Garden.Duel memory duel = garden.duelOf(duelId);
+        Garden.CrystalView memory a = garden.crystalOf(duel.creatorCrystal);
+        Garden.CrystalView memory b = garden.crystalOf(duel.challengerCrystal);
+        bytes32[9] memory handles = [
+            euint8.unwrap(a.element),
+            euint8.unwrap(a.level),
+            euint64.unwrap(a.mana),
+            euint8.unwrap(b.element),
+            euint8.unwrap(b.level),
+            euint64.unwrap(b.mana),
+            ebool.unwrap(duel.creatorWins),
+            ebool.unwrap(garden.lobbyOf(lobbyId).creatorPaid),
+            euint64.unwrap(garden.potOf(duel.season))
+        ];
+        IAcl acl = IAcl(getCoprocessorConfig(address(garden)).ACLAddress);
+        for (uint256 i; i < handles.length; i++) {
+            if (handles[i] == 0) continue;
+            assertFalse(acl.isAllowed(handles[i], stranger), string.concat(label, ": the publisher may use a handle"));
+        }
     }
 
     /// A grant to the contract of a credited balance, as accrual keeps it: no longer stored, so checked by its value.

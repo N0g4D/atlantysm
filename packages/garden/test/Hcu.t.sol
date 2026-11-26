@@ -28,6 +28,8 @@ contract HcuTest is GardenFixture {
     uint256 internal lobbyToCancel;
     uint256 internal duelToPublish;
     uint256 internal duelToRank;
+    /// A crystal of Alice's that fought in setUp and waits in no lobby: a third one to transfer.
+    uint256 internal spare;
 
     /**
      * @dev Everything a measured call reads is made here. A forge test is one transaction, so a handle made in the
@@ -51,6 +53,7 @@ contract HcuTest is GardenFixture {
         lobbyToJoin = _openLobby(creator, STAKE);
         lobbyToCancel = _openLobby(canceller, STAKE);
         duelToPublish = _duel(duellists[0], duellists[1], STAKE);
+        spare = duellists[0];
         // Three duels between six other crystals, published in season 1, give it three winners, and a rise puts MANA in
         // its centre: closing it pays all three shares, the most it can do.
         for (uint256 i; i < 3; i++) {
@@ -134,11 +137,36 @@ contract HcuTest is GardenFixture {
     }
 
     /// A transfer seals the level and MANA again, whatever they hold, and credits nothing. `transferFrom` and both
-    /// `safeTransferFrom` run the same hook.
+    /// `safeTransferFrom` run the same hook, at the same cost: the receiver's check comes after it, and runs no
+    /// encrypted operation. Each call moves a crystal whose handles come from setUp, as an earlier transaction would
+    /// leave them.
     function testTransferringStaysUnderHalfOfEachCap() public {
         resetHCU();
         _transfer(alice, bob, crystal);
-        _assertWithinBudget("transfer", lastHCU(), 64_032, 34_000);
+        _assertWithinBudget("transferFrom", lastHCU(), 64_032, 34_000);
+
+        resetHCU();
+        vm.prank(bob);
+        garden.safeTransferFrom(bob, alice, challenger);
+        _assertWithinBudget("safeTransferFrom", lastHCU(), 64_032, 34_000);
+
+        resetHCU();
+        vm.prank(alice);
+        garden.safeTransferFrom(alice, bob, spare, "data");
+        _assertWithinBudget("safeTransferFrom with data", lastHCU(), 64_032, 34_000);
+    }
+
+    /// Approving an account for one crystal, or an operator for all of them, changes no encrypted value (RULES.md §4).
+    function testApprovingRunsNoEncryptedOperation() public {
+        resetHCU();
+        vm.prank(alice);
+        garden.approve(stranger, crystal);
+        _assertNoEncryptedOperation("approve");
+
+        resetHCU();
+        vm.prank(alice);
+        garden.setApprovalForAll(stranger, true);
+        _assertNoEncryptedOperation("setApprovalForAll");
     }
 
     /// Not an external function, but a transaction with FHE work: the constructor draws GARDEN_ZERO.
@@ -153,6 +181,11 @@ contract HcuTest is GardenFixture {
         resetHCU();
         vm.prank(stranger);
         garden.publish(duelId, creatorWon, proof);
+        _assertNoEncryptedOperation(name);
+    }
+
+    /// The call measured since the last `resetHCU` metered nothing, and SEASON0.md §2.6 says 0.
+    function _assertNoEncryptedOperation(string memory name) internal {
         FhevmHCUMeter memory hcu = lastHCU();
         emit log_named_uint(string.concat(name, ": HCU per transaction"), hcu.transaction);
         emit log_named_uint(string.concat(name, ": HCU depth"), hcu.maxHandle);
